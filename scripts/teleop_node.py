@@ -1,7 +1,6 @@
 #! /usr/bin/env python3
 import modern_robotics as mr
 import rclpy
-import rclpy.logging
 from rclpy.node import Node
 from rclpy.qos import ReliabilityPolicy, HistoryPolicy, QoSProfile
 from rclpy.wait_for_message import wait_for_message
@@ -12,7 +11,7 @@ from interbotix_common_modules.common_robot.robot import robot_shutdown, robot_s
 from std_msgs.msg import String
 
 import numpy as np
-
+from tf_transformations import euler_matrix
 
 ANGULAR_GAIN = 0.5
 LINEAR_GAIN = 1.0
@@ -53,8 +52,8 @@ class TeleopNode(Node):
         # Initialise robot
         self.context.on_shutdown(self.reset_trajectory_speed) #TODO: This doesn't work!!!
         self.bot.arm.go_to_home_pose(moving_time=3, blocking=True)
-        # self.bot.arm.set_single_joint_position("wrist_angle", 1.57, moving_time=3, blocking=True)
-        self.bot.arm.set_ee_pose_components(x=0.3,z=0.4, moving_time=3)
+        self.bot.arm.set_single_joint_position("wrist_angle", 1.57, moving_time=3, blocking=True)
+        # self.bot.arm.set_ee_pose_components(x=0.3,z=0.4, moving_time=3)
         self.new_pose = mr.se3ToVec(self.bot.arm.get_ee_pose())
         self.bot.gripper.release()
         self.gripper_is_open = True
@@ -69,12 +68,12 @@ class TeleopNode(Node):
         _, command_msg = wait_for_message(String, self, '/teleop_commands', qos_profile=teleop_qos)
         self.current_command = json.loads(command_msg.data)
         self.velocity_command = [0, 0, 0, 0, 0, 0]
-        self.create_subscription(String, '/teleop_commands', self.command_callback1, teleop_qos)
+        self.create_subscription(String, '/teleop_commands', self.command_callback, teleop_qos)
 
         self._logger.info("Command received, starting control loop!")
         self.create_timer(self.dt, self.control_loop)
         
-    def command_callback1(self, msg):
+    def command_callback(self, msg):
         message = json.loads(msg.data)
         if not message["header"]["messageType"].split('.')[-1] == "TeleopCommandMessage":
             return
@@ -84,84 +83,43 @@ class TeleopNode(Node):
         
         if self.is_engaged == False and current_engaged == True:
             # NOTE: For some reason, modern robotics sets the pose vector as [yaw, pitch, roll, x, y, z]
-            self.new_pose = mr.se3ToVec(self.bot.arm.get_ee_pose())
+            self.current_pose = self.bot.arm.get_ee_pose()
 
         self.is_engaged = current_engaged
         
-        command = [
-            ANGULAR_GAIN*self.current_command[f"{self.teleop_controller}Vel"]["angular"]["x"],
-            -ANGULAR_GAIN*self.current_command[f"{self.teleop_controller}Vel"]["angular"]["y"],
-            -ANGULAR_GAIN*self.current_command[f"{self.teleop_controller}Vel"]["angular"]["z"],
-            LINEAR_GAIN*self.current_command[f"{self.teleop_controller}Vel"]["linear"]["x"],
-            LINEAR_GAIN*self.current_command[f"{self.teleop_controller}Vel"]["linear"]["y"],
-            LINEAR_GAIN*self.current_command[f"{self.teleop_controller}Vel"]["linear"]["z"],
+        self.command = [
+            LINEAR_GAIN*self.current_command[f"{self.teleop_controller}Vel"]["linear"]["x"]*self.dt,
+            LINEAR_GAIN*self.current_command[f"{self.teleop_controller}Vel"]["linear"]["y"]*self.dt,
+            LINEAR_GAIN*self.current_command[f"{self.teleop_controller}Vel"]["linear"]["z"]*self.dt,
+            ANGULAR_GAIN*self.current_command[f"{self.teleop_controller}Vel"]["angular"]["y"]*self.dt,
+            -ANGULAR_GAIN*self.current_command[f"{self.teleop_controller}Vel"]["angular"]["x"]*self.dt,
+            -ANGULAR_GAIN*self.current_command[f"{self.teleop_controller}Vel"]["angular"]["z"]*self.dt,
         ]
+        # self._logger.info(f"{self.command}")
         self.current_command = message
         if self.is_engaged:
-            self.velocity_command = self.filter.filter(command)
+            self.velocity_command = self.filter.filter(self.command)
 
     def control_loop(self):
         if not self.is_engaged:
             return
 
         # Control the arm
-        target_pose = np.array(self.new_pose) + np.array(self.velocity_command)*self.dt*2
+        T_base_target = np.identity(4)
+        T_base_target[:3, :3] = euler_matrix(self.command[3], self.command[4], self.command[5])[:3, :3] @ self.current_pose[:3, :3]
+        T_base_target[:3, 3] = self.current_pose[:3, 3] + self.command[:3]
 
-        _, succes = self.bot.arm.set_ee_pose_components(
-            x = target_pose[3],
-            y = target_pose[4],
-            z = target_pose[5],
-            roll = target_pose[0],
-            pitch = target_pose[1],
-            yaw = target_pose[2],
+        _, succes = self.bot.arm.set_ee_pose_matrix(
+            T_base_target,
+            custom_guess=self.bot.arm.get_joint_positions(),
             moving_time=self.dt*2,
             blocking=False
         )
 
+        self._logger.info(f"{self.bot.arm.get_joint_positions()}")
+
         if succes:
-            self.new_pose = (np.array(self.new_pose) + np.array(self.velocity_command)*self.dt).tolist()
-
-        # command = self.current_command[f"{self.teleop_controller}Vel"]
-        # self._logger.info(f"angular vel: {command['angular']}")
-
-        # self.new_pose = [
-        #     self.new_pose[0] + ANGULAR_GAIN*command["angular"]["x"]*self.dt*2,
-        #     self.new_pose[1] + ANGULAR_GAIN*command["angular"]["y"]*self.dt*2,
-        #     self.new_pose[2] + ANGULAR_GAIN*command["angular"]["z"]*self.dt*2,
-        #     self.new_pose[3] + LINEAR_GAIN*command["linear"]["x"]*self.dt*2,
-        #     self.new_pose[4] + LINEAR_GAIN*command["linear"]["y"]*self.dt*2,
-        #     self.new_pose[5] + LINEAR_GAIN*command["linear"]["z"]*self.dt*2,
-        # ]
-
-        # _, succes = self.bot.arm.set_ee_pose_components(
-        #     x = self.new_pose[3],
-        #     y = self.new_pose[4],
-        #     z = self.new_pose[5],
-        #     roll = self.new_pose[0],
-        #     pitch = self.new_pose[1],
-        #     yaw = self.new_pose[2],
-        #     moving_time=self.dt*2,
-        #     blocking=False
-        # )
-
-        # if succes:
-        #     self.new_pose = [
-        #         self.new_pose[0] - ANGULAR_GAIN*command["angular"]["x"]*self.dt,
-        #         self.new_pose[1] - ANGULAR_GAIN*command["angular"]["y"]*self.dt,
-        #         self.new_pose[2] - ANGULAR_GAIN*command["angular"]["z"]*self.dt,
-        #         self.new_pose[3] - LINEAR_GAIN*command["linear"]["x"]*self.dt,
-        #         self.new_pose[4] - LINEAR_GAIN*command["linear"]["y"]*self.dt,
-        #         self.new_pose[5] - LINEAR_GAIN*command["linear"]["z"]*self.dt,
-        #     ]
-        # else:
-        #     self.new_pose = [
-        #         self.new_pose[0] - ANGULAR_GAIN*command["angular"]["x"]*self.dt*2,
-        #         self.new_pose[1] - ANGULAR_GAIN*command["angular"]["y"]*self.dt*2,
-        #         self.new_pose[2] - ANGULAR_GAIN*command["angular"]["z"]*self.dt*2,
-        #         self.new_pose[3] - LINEAR_GAIN*command["linear"]["x"]*self.dt*2,
-        #         self.new_pose[4] - LINEAR_GAIN*command["linear"]["y"]*self.dt*2,
-        #         self.new_pose[5] - LINEAR_GAIN*command["linear"]["z"]*self.dt*2,
-        #     ]
+            self.current_pose = T_base_target
 
         # Control the gripper
         if self.current_command[f"{self.teleop_controller}Buttons"]["triggerValue"] > 0.75 and self.gripper_is_open:
