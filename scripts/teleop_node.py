@@ -5,6 +5,7 @@ from rclpy.node import Node
 from rclpy.qos import ReliabilityPolicy, HistoryPolicy, QoSProfile
 from rclpy.wait_for_message import wait_for_message
 import json
+from incar.dataset.messages import TeleopCommandMessage, JointStateMessage
 
 from interbotix_xs_modules.xs_robot.arm import InterbotixManipulatorXS
 from interbotix_common_modules.common_robot.robot import robot_shutdown, robot_startup
@@ -67,6 +68,9 @@ class TeleopNode(Node):
         )
         _, command_msg = wait_for_message(String, self, '/teleop_commands', qos_profile=teleop_qos)
         self.current_command = json.loads(command_msg.data)
+        if type(self.current_command) is str:
+            self.current_command = json.loads(self.current_command)
+        
         self.velocity_command = [0, 0, 0, 0, 0, 0]
         self.create_subscription(String, '/teleop_commands', self.command_callback, teleop_qos)
 
@@ -75,6 +79,8 @@ class TeleopNode(Node):
         
     def command_callback(self, msg):
         message = json.loads(msg.data)
+        if type(message) is str:
+            message = json.loads(message)
         if not message["header"]["messageType"].split('.')[-1] == "TeleopCommandMessage":
             return
         

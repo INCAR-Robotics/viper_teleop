@@ -10,6 +10,10 @@ from rclpy.node import Node
 from rclpy.qos import ReliabilityPolicy, HistoryPolicy, QoSProfile
 from std_msgs.msg import String
 from sensor_msgs.msg import JointState
+from tf2_ros.buffer import Buffer
+from tf2_ros.transform_listener import TransformListener
+from tf2_ros import TransformException
+from datetime import datetime
 
 
 TELEOP_COMMAND_CHANNEL = "teleop_command"
@@ -36,11 +40,22 @@ class WebRTCNode(Node):
             history = HistoryPolicy.KEEP_LAST,
             depth = 10
         )
+
+        # TODO: Get transforms from TF for base coords of robot state
+        # TODO: Add EE frame in Robot state message?
+        # self.tf_buffer = Buffer()
+        # self.tf_listener = TransformListener(self.tf_buffer, self)
+        # try:
+        #     t = self.tf_buffer.lookup_transform('left', 'world', 0)
+        # except TransformException as ex:
+        #     self.get_logger().info(
+        #         f'Could not transform {'world'} to {'left'}: {ex}')
+
         self.create_subscription(JointState, '/left/joint_states', self.set_left_message, qos_profile=joint_state_qos)
         self.create_subscription(JointState, '/right/joint_states', self.set_right_message, qos_profile=joint_state_qos)
 
     def handle_msg(self, channel, msg):
-        # self._logger.info(f"received message on channel: {channel}")
+        self._logger.info(f"received message on channel: {channel}")
         if channel == TELEOP_COMMAND_CHANNEL:
             try:
                 ros_msg = String()
@@ -57,22 +72,24 @@ class WebRTCNode(Node):
                 continue
 
             await asyncio.sleep(0.02)
-            continue
+            if self.rtc.data_channels[ROBOT_STATE_CHANNEL].bufferedAmount != 0: return
             if self.left_state_msg is not None:
-                self.rtc.send_channel(ROBOT_STATE_CHANNEL, json.dumps(self.left_state_msg))
+                self.rtc.send_channel(ROBOT_STATE_CHANNEL, self.left_state_msg)
             if self.right_state_msg is not None:
-                self.rtc.send_channel(ROBOT_STATE_CHANNEL, json.dumps(self.right_state_msg))
+                self.rtc.send_channel(ROBOT_STATE_CHANNEL, self.right_state_msg)
 
     async def spin(self):
         while rclpy.ok():
             rclpy.spin_once(self, timeout_sec=0)
             await asyncio.sleep(1e-4)
 
-    def start(self):
-        # self.rtc = (WebRTCConnection()
-        #     .add_on_datachannel_event(on_msg_event = lambda channel, msg: self.handle_msg(channel, msg))
-        #     .add_track(CV2VideoStreamTrack(0)))
-        
+    async def add_tracks(self):
+        await asyncio.sleep(3)
+        await self.rtc.add_track_after_connect(CV2VideoStreamTrack(4, bitrate=100, verbose=True), "video_ee_left")
+        await asyncio.sleep(10)
+        await self.rtc.add_track_after_connect(CV2VideoStreamTrack(10, bitrate=100, verbose=True), "video_ee_right")
+
+    def start(self):        
         self.rtc = (WebRTCConnection()
                     .add_channel(TELEOP_COMMAND_CHANNEL, lambda msg: self.handle_msg(TELEOP_COMMAND_CHANNEL, msg))
                     .add_channel(ROBOT_STATE_CHANNEL))
@@ -81,7 +98,8 @@ class WebRTCNode(Node):
             [
                 self.spin(),
                 self.send_robot_state(),
-                self.rtc.start_connection(self.get_parameter('ip').value, self.get_parameter('port').value, True)
+                self.rtc.start_connection(self.get_parameter('ip').value, self.get_parameter('port').value, False),
+                self.add_tracks()
             ], 
             return_when=asyncio.FIRST_EXCEPTION
         )
@@ -96,7 +114,7 @@ class WebRTCNode(Node):
         state_message = dict()
         
         state_message["header"] = dict()
-        state_message["header"]["timestamp"] = ""
+        state_message["header"]["timestamp"] = datetime.now().isoformat()
         state_message["header"]["messageType"] = "RobotStateMessage"
         state_message["header"]["version"] = "0.0.1"
         
@@ -113,7 +131,7 @@ class WebRTCNode(Node):
         state_message["baseFrame"]["rotation"]["z"] = 0
         state_message["baseFrame"]["rotation"]["w"] = 1
 
-        state_message["jointStates"] = msg.position
+        state_message["jointStates"] = msg.position.tolist()
         state_message["robotType"] = "dual_viper"
 
         self.left_state_msg = state_message
@@ -122,7 +140,7 @@ class WebRTCNode(Node):
         state_message = dict()
         
         state_message["header"] = dict()
-        state_message["header"]["timestamp"] = ""
+        state_message["header"]["timestamp"] = datetime.now().isoformat()
         state_message["header"]["messageType"] = "RobotStateMessage"
         state_message["header"]["version"] = "0.0.1"
         
@@ -139,7 +157,7 @@ class WebRTCNode(Node):
         state_message["baseFrame"]["rotation"]["z"] = 1
         state_message["baseFrame"]["rotation"]["w"] = 0
 
-        state_message["jointStates"] = msg.position
+        state_message["jointStates"] = msg.position.tolist()
         state_message["robotType"] = "dual_viper"
 
         self.right_state_msg = state_message
