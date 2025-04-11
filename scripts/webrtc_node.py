@@ -72,7 +72,7 @@ class WebRTCNode(Node):
                 continue
 
             await asyncio.sleep(0.02)
-            if self.rtc.data_channels[ROBOT_STATE_CHANNEL].bufferedAmount != 0: return
+            if self.rtc.data_channels[ROBOT_STATE_CHANNEL].bufferedAmount != 0: continue
             if self.left_state_msg is not None:
                 self.rtc.send_channel(ROBOT_STATE_CHANNEL, self.left_state_msg)
             if self.right_state_msg is not None:
@@ -85,9 +85,9 @@ class WebRTCNode(Node):
 
     async def add_tracks(self):
         await asyncio.sleep(3)
-        await self.rtc.add_track_after_connect(CV2VideoStreamTrack(4, bitrate=100, verbose=True), "video_ee_left")
-        await asyncio.sleep(10)
-        await self.rtc.add_track_after_connect(CV2VideoStreamTrack(10, bitrate=100, verbose=True), "video_ee_right")
+        await self.rtc.add_track_after_connect(CV2VideoStreamTrack(4, bitrate=100), "video_ee_left")
+        await asyncio.sleep(3)
+        await self.rtc.add_track_after_connect(CV2VideoStreamTrack(10, bitrate=100), "video_ee_right")
 
     def start(self):        
         self.rtc = (WebRTCConnection()
