@@ -8,7 +8,8 @@ def generate_launch_description():
         namespace = 'left',
         executable = 'teleop_node.py',
         name = 'teleop',
-        output = 'screen'
+        output = 'screen',
+        parameters=[{'starting_pose': [0.1457, -0.6136, 0.8084, -1.3315, 0.9603, 1.5447]}]
     )
 
     right_teleop_node = Node(
@@ -16,7 +17,8 @@ def generate_launch_description():
         namespace = 'right',
         executable = 'teleop_node.py',
         name = 'teleop',
-        output = 'screen'
+        output = 'screen',
+        parameters=[{'starting_pose': [-0.8483, -0.2638, 0.4955, 1.6076, 1.6245, -0.2884]}]
     )
 
     webrtc_node = Node(

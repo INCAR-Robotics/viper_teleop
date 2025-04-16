@@ -33,6 +33,8 @@ class Filter:
 class TeleopNode(Node):
     def __init__(self):
         super().__init__('teleop')
+        self.declare_parameter('starting_pose', [0.0107, 0.0169, 0.0276, -0.0077, 1.5693, 0.0123])
+        self.declare_parameter('start_with_gripper_open', True)
         self._logger.info(f"Starting robot {self.get_namespace()}")
         if not self.get_namespace() in ['/left', '/right']:
             self._logger.error(f"Expected namespace to be either '/left' or '/right', but it was {self.get_namespace()}")
@@ -40,6 +42,7 @@ class TeleopNode(Node):
         self.is_engaged = False
         self.dt = 0.1 # TODO: From parameter
         self.filter = Filter(0.5, 6)
+
 
         self.bot = InterbotixManipulatorXS(
             robot_model='vx300s',
@@ -52,12 +55,15 @@ class TeleopNode(Node):
 
         # Initialise robot
         self.context.on_shutdown(self.reset_trajectory_speed) #TODO: This doesn't work!!!
-        self.bot.arm.go_to_home_pose(moving_time=3, blocking=True)
-        self.bot.arm.set_single_joint_position("wrist_angle", 1.57, moving_time=3, blocking=True)
-        # self.bot.arm.set_ee_pose_components(x=0.3,z=0.4, moving_time=3)
+        starting_pose = self.get_parameter('starting_pose').value
+        self.bot.arm.set_joint_positions(starting_pose, moving_time=3, blocking=True)
         self.new_pose = mr.se3ToVec(self.bot.arm.get_ee_pose())
-        self.bot.gripper.release()
-        self.gripper_is_open = True
+        if self.get_parameter('start_with_gripper_open'):
+            self.bot.gripper.release()
+            self.gripper_is_open = True
+        else:
+            self.bot.gripper.grasp()
+            self.gripper_is_open = False
 
         # Subscribe to teleop_commands
         self._logger.info("Initialised robot, waiting for first command...")
@@ -78,6 +84,7 @@ class TeleopNode(Node):
         self.create_timer(self.dt, self.control_loop)
         
     def command_callback(self, msg):
+        #TODO: Use TeleopCommandMessage class
         message = json.loads(msg.data)
         if type(message) is str:
             message = json.loads(message)
@@ -86,9 +93,8 @@ class TeleopNode(Node):
         
         current_engaged = (message[f"{self.teleop_controller}Buttons"]["primaryButton"] 
             and message[f"{self.teleop_controller}Buttons"]["gripValue"] > 0.5)
-        
+
         if self.is_engaged == False and current_engaged == True:
-            # NOTE: For some reason, modern robotics sets the pose vector as [yaw, pitch, roll, x, y, z]
             self.current_pose = self.bot.arm.get_ee_pose()
 
         self.is_engaged = current_engaged
@@ -97,14 +103,19 @@ class TeleopNode(Node):
             LINEAR_GAIN*self.current_command[f"{self.teleop_controller}Vel"]["linear"]["x"]*self.dt,
             LINEAR_GAIN*self.current_command[f"{self.teleop_controller}Vel"]["linear"]["y"]*self.dt,
             LINEAR_GAIN*self.current_command[f"{self.teleop_controller}Vel"]["linear"]["z"]*self.dt,
-            ANGULAR_GAIN*self.current_command[f"{self.teleop_controller}Vel"]["angular"]["y"]*self.dt,
             -ANGULAR_GAIN*self.current_command[f"{self.teleop_controller}Vel"]["angular"]["x"]*self.dt,
+            -ANGULAR_GAIN*self.current_command[f"{self.teleop_controller}Vel"]["angular"]["y"]*self.dt,
             -ANGULAR_GAIN*self.current_command[f"{self.teleop_controller}Vel"]["angular"]["z"]*self.dt,
         ]
         # self._logger.info(f"{self.command}")
         self.current_command = message
         if self.is_engaged:
             self.velocity_command = self.filter.filter(self.command)
+
+        if message[f"{self.teleop_controller}Buttons"]["joystickValue"]["x"] > 0.5 and message[f"{self.teleop_controller}Buttons"]["secondaryButton"]:
+            self.is_engaged = False
+            self.bot.arm.go_to_home_pose(moving_time=5, blocking=True)
+            self.is_engaged = current_engaged
 
     def control_loop(self):
         if not self.is_engaged:
@@ -122,7 +133,7 @@ class TeleopNode(Node):
             blocking=False
         )
 
-        self._logger.info(f"{self.bot.arm.get_joint_positions()}")
+        # self._logger.info(f"{self.bot.arm.get_joint_positions()}")
 
         if succes:
             self.current_pose = T_base_target
