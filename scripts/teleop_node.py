@@ -55,8 +55,7 @@ class TeleopNode(Node):
 
         # Initialise robot
         self.context.on_shutdown(self.reset_trajectory_speed) #TODO: This doesn't work!!!
-        starting_pose = self.get_parameter('starting_pose').value
-        self.bot.arm.set_joint_positions(starting_pose, moving_time=3, blocking=True)
+        self.bot.arm.set_joint_positions(self.get_parameter('starting_pose').value, moving_time=3, blocking=True)
         self.new_pose = mr.se3ToVec(self.bot.arm.get_ee_pose())
         if self.get_parameter('start_with_gripper_open'):
             self.bot.gripper.release()
@@ -114,7 +113,7 @@ class TeleopNode(Node):
 
         if message[f"{self.teleop_controller}Buttons"]["joystickValue"]["x"] > 0.5 and message[f"{self.teleop_controller}Buttons"]["secondaryButton"]:
             self.is_engaged = False
-            self.bot.arm.go_to_home_pose(moving_time=5, blocking=True)
+            self.bot.arm.set_joint_positions(self.get_parameter('starting_pose').value, moving_time=3, blocking=True)
             self.is_engaged = current_engaged
 
     def control_loop(self):
