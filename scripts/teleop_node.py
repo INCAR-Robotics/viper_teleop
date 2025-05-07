@@ -1,34 +1,20 @@
 #! /usr/bin/env python3
-import modern_robotics as mr
+import time
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import ReliabilityPolicy, HistoryPolicy, QoSProfile
 from rclpy.wait_for_message import wait_for_message
 import json
-from incar.dataset.messages import TeleopCommandMessage, JointStateMessage
 
 from interbotix_xs_modules.xs_robot.arm import InterbotixManipulatorXS
-from interbotix_common_modules.common_robot.robot import robot_shutdown, robot_startup
-from std_msgs.msg import String
+from interbotix_common_modules.common_robot.robot import robot_startup
+from std_msgs.msg import String, Float32MultiArray
 
 import numpy as np
 from tf_transformations import euler_matrix
+from incar.messages import RobotCommandMessage, GO_HOME_COMMAND
 
-ANGULAR_GAIN = 0.5
-LINEAR_GAIN = 1.0
-
-class Filter:
-    def __init__(self, alpha: float, size):
-        self.alpha: float = alpha
-        self.size = size
-        self.value: np.ndarray = np.zeros(size)
-
-    def filter(self, new_value):
-        self.value = (1-self.alpha)*self.value + self.alpha*np.array(new_value)
-        return self.value.tolist()
-    
-    def reset(self):
-        self.value = np.zeros(self.size)
+COMMAND_TIMEOUT = 0.2
 
 class TeleopNode(Node):
     def __init__(self):
@@ -39,10 +25,9 @@ class TeleopNode(Node):
         if not self.get_namespace() in ['/left', '/right']:
             self._logger.error(f"Expected namespace to be either '/left' or '/right', but it was {self.get_namespace()}")
         self.teleop_controller = self.get_namespace()[1:]
-        self.is_engaged = False
         self.dt = 0.1 # TODO: From parameter
-        self.filter = Filter(0.5, 6)
-
+        self.is_engaged = True
+        self.last_command_received = time.time()
 
         self.bot = InterbotixManipulatorXS(
             robot_model='vx300s',
@@ -53,11 +38,12 @@ class TeleopNode(Node):
 
         robot_startup()
 
+        self.ee_state_publisher = self.create_publisher(Float32MultiArray, 'ee_state', 1)
+
         # Initialise robot
-        self.context.on_shutdown(self.reset_trajectory_speed) #TODO: This doesn't work!!!
-        self.bot.arm.set_joint_positions(self.get_parameter('starting_pose').value, moving_time=3, blocking=True)
-        self.new_pose = mr.se3ToVec(self.bot.arm.get_ee_pose())
-        if self.get_parameter('start_with_gripper_open'):
+        self.bot.arm.set_joint_positions(self.get_parameter('starting_pose').value, moving_time=5, blocking=True)
+        self.current_pose = self.bot.arm.get_ee_pose()
+        if self.get_parameter('start_with_gripper_open').value:
             self.bot.gripper.release()
             self.gripper_is_open = True
         else:
@@ -71,54 +57,63 @@ class TeleopNode(Node):
             history = HistoryPolicy.KEEP_LAST,
             depth = 1
         )
-        _, command_msg = wait_for_message(String, self, '/teleop_commands', qos_profile=teleop_qos)
+        _, command_msg = wait_for_message(String, self, '/robot_commands', qos_profile=teleop_qos)
         self.current_command = json.loads(command_msg.data)
         if type(self.current_command) is str:
             self.current_command = json.loads(self.current_command)
-        
-        self.velocity_command = [0, 0, 0, 0, 0, 0]
-        self.create_subscription(String, '/teleop_commands', self.command_callback, teleop_qos)
+
+        self.create_subscription(String, '/robot_commands', self.command_callback, teleop_qos)
 
         self._logger.info("Command received, starting control loop!")
         self.create_timer(self.dt, self.control_loop)
+        self.create_timer(0.02, self.state_loop)
         
-    def command_callback(self, msg):
-        #TODO: Use TeleopCommandMessage class
-        message = json.loads(msg.data)
-        if type(message) is str:
-            message = json.loads(message)
-        if not message["header"]["messageType"].split('.')[-1] == "TeleopCommandMessage":
-            return
-        
-        current_engaged = (message[f"{self.teleop_controller}Buttons"]["primaryButton"] 
-            and message[f"{self.teleop_controller}Buttons"]["gripValue"] > 0.5)
-
-        if self.is_engaged == False and current_engaged == True:
-            self.current_pose = self.bot.arm.get_ee_pose()
-
-        self.is_engaged = current_engaged
+    def command_callback(self, msg):  
+        command_msg = RobotCommandMessage.from_json(msg.data)
         
         self.command = [
-            LINEAR_GAIN*self.current_command[f"{self.teleop_controller}Vel"]["linear"]["x"]*self.dt,
-            LINEAR_GAIN*self.current_command[f"{self.teleop_controller}Vel"]["linear"]["y"]*self.dt,
-            LINEAR_GAIN*self.current_command[f"{self.teleop_controller}Vel"]["linear"]["z"]*self.dt,
-            -ANGULAR_GAIN*self.current_command[f"{self.teleop_controller}Vel"]["angular"]["x"]*self.dt,
-            -ANGULAR_GAIN*self.current_command[f"{self.teleop_controller}Vel"]["angular"]["y"]*self.dt,
-            -ANGULAR_GAIN*self.current_command[f"{self.teleop_controller}Vel"]["angular"]["z"]*self.dt,
+            command_msg.commands[self.teleop_controller][0]*self.dt,
+            command_msg.commands[self.teleop_controller][1]*self.dt,
+            command_msg.commands[self.teleop_controller][2]*self.dt,
+            -command_msg.commands[self.teleop_controller][3]*self.dt,
+            -command_msg.commands[self.teleop_controller][4]*self.dt,
+            -command_msg.commands[self.teleop_controller][5]*self.dt,
         ]
-        # self._logger.info(f"{self.command}")
-        self.current_command = message
-        if self.is_engaged:
-            self.velocity_command = self.filter.filter(self.command)
+        self._logger.info(f"{self.command}")
+        self.gripper_command = command_msg.commands[self.teleop_controller][6]
 
-        if message[f"{self.teleop_controller}Buttons"]["joystickValue"]["x"] > 0.5 and message[f"{self.teleop_controller}Buttons"]["secondaryButton"]:
+        if GO_HOME_COMMAND in command_msg.string_commands[self.teleop_controller]:
             self.is_engaged = False
             self.bot.arm.set_joint_positions(self.get_parameter('starting_pose').value, moving_time=3, blocking=True)
-            self.is_engaged = current_engaged
+            self.current_pose = self.bot.arm.get_ee_pose()
+            if self.get_parameter('start_with_gripper_open').value:
+                self.bot.gripper.release()
+                self.gripper_is_open = True
+            else:
+                self.bot.gripper.grasp()
+                self.gripper_is_open = False
+            self.is_engaged = True
+
+        self.last_command_received = time.time()
 
     def control_loop(self):
-        if not self.is_engaged:
+        if not self.is_engaged or time.time() - self.last_command_received > COMMAND_TIMEOUT:
             return
+        # TODO: These should not be necessary, but just for now...
+        if max(self.command[:3]) > 0.02 or min(self.command[:3]) < -0.02:
+            self._logger.info("EXCEEDED LINEAR LIMITS")
+            return
+        if max(self.command[3:6]) > 0.1 or min(self.command[3:6]) < -0.1:
+            self._logger.info("EXCEEDED ANGULAR LIMITS")
+            return
+
+    
+        if self.gripper_command > 0.75 and self.gripper_is_open:
+            self.bot.gripper.grasp(0)
+            self.gripper_is_open = False
+        elif self.gripper_command < 0.25 and not self.gripper_is_open:
+            self.bot.gripper.release(0)
+            self.gripper_is_open = True
 
         # Control the arm
         T_base_target = np.identity(4)
@@ -132,23 +127,35 @@ class TeleopNode(Node):
             blocking=False
         )
 
-        # self._logger.info(f"{self.bot.arm.get_joint_positions()}")
-
         if succes:
             self.current_pose = T_base_target
 
-        # Control the gripper
-        if self.current_command[f"{self.teleop_controller}Buttons"]["triggerValue"] > 0.75 and self.gripper_is_open:
-            self.bot.gripper.grasp()
-            self.gripper_is_open = False
-        elif self.current_command[f"{self.teleop_controller}Buttons"]["triggerValue"] < 0.25 and not self.gripper_is_open:
-            self.bot.gripper.release()
-            self.gripper_is_open = True
+    def state_loop(self):
+        current_robot_pose = self.bot.arm.get_ee_pose()
+        state_msg = Float32MultiArray()
+        state_msg.data = get_pose_from_transform(current_robot_pose)
+        self.ee_state_publisher.publish(state_msg)
 
-    def reset_trajectory_speed(self):
-        self.bot.arm.set_trajectory_time(moving_time=2)
-        robot_shutdown()
-        self._logger.info("Shutdown teleop node, reset trajectory time")
+def get_pose_from_transform(transform):
+    """
+    Extracts the 6D Cartesian pose (position and orientation) from a 4x4 transformation matrix.
+    
+    Args:
+        transform (numpy.ndarray): A 4x4 transformation matrix.
+        
+    Returns:
+        tuple: A tuple containing the position (x, y, z) and orientation (roll, pitch, yaw) in radians.
+    """
+    # Extract the position
+    position = transform[:3, 3]
+    
+    # Extract the orientation
+    # We use the following convention: roll (x-axis), pitch (y-axis), yaw (z-axis)
+    roll = np.arctan2(transform[2, 1], transform[2, 2])
+    pitch = np.arctan2(-transform[2, 0], np.sqrt(transform[2, 1]**2 + transform[2, 2]**2))
+    yaw = np.arctan2(transform[1, 0], transform[0, 0])
+    
+    return [position[0], position[1], position[2], roll, pitch, yaw]
 
 if __name__ == '__main__':
     rclpy.init()
