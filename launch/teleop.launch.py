@@ -9,7 +9,9 @@ def generate_launch_description():
         executable = 'teleop_node.py',
         name = 'teleop',
         output = 'screen',
-        parameters=[{'starting_pose': [0.1457, -0.6136, 0.8084, -1.3315, 0.9603, 1.5447]}]
+        parameters=[{
+            'dt': 0.02,
+            'starting_pose': [-0.0107, -0.2286, 0.2291, 0.0077, 1.3668, -0.0674]}]
     )
 
     right_teleop_node = Node(
@@ -18,7 +20,8 @@ def generate_launch_description():
         executable = 'teleop_node.py',
         name = 'teleop',
         output = 'screen',
-        parameters=[{'starting_pose': [-0.8483, -0.2638, 0.4955, 1.6076, 1.6245, -0.2884]}]
+        parameters=[{'starting_pose': [-0.8483, -0.2638, 0.4955, 1.6076, 1.6245, -0.2884],
+                     'start_with_gripper_open': False}]
     )
 
     webrtc_node = Node(
@@ -27,12 +30,12 @@ def generate_launch_description():
         name = 'webrtc',
         output = 'screen',
         emulate_tty = True,
-        parameters=[{'ip': '192.168.200.130', 
+        parameters=[{'ip': '192.168.200.220', 
                      'port': 9999}]
     )
 
     return LaunchDescription([
         webrtc_node,
         left_teleop_node,
-        right_teleop_node
+        # right_teleop_node
     ])
