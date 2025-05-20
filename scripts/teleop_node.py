@@ -89,17 +89,22 @@ class TeleopNode(Node):
     def command_callback(self, msg):  
         command_msg = RobotCommandMessage.from_json(msg.data)
         
-        self.command = [
-            command_msg.commands[self.teleop_controller][0]*self.dt,
-            command_msg.commands[self.teleop_controller][1]*self.dt,
-            command_msg.commands[self.teleop_controller][2]*self.dt,
-            -command_msg.commands[self.teleop_controller][3]*self.dt,
-            -command_msg.commands[self.teleop_controller][4]*self.dt,
-            -command_msg.commands[self.teleop_controller][5]*self.dt,
-        ]
-        # self._logger.info(f"{command_msg.commands[self.teleop_controller]}")
-        self.gripper_command = command_msg.commands[self.teleop_controller][6]
-        # self._logger.info(f"{self.gripper_command}")
+        if not f"teleop_action_{self.teleop_controller}" in command_msg.commands.keys():
+            self._logger.info("No teleop control command")
+            self.command = [0, 0, 0, 0, 0, 0]
+            self.gripper_command = 0
+        else:
+            self.command = [
+                command_msg.commands[f"teleop_action_{self.teleop_controller}"][0]*self.dt,
+                command_msg.commands[f"teleop_action_{self.teleop_controller}"][1]*self.dt,
+                command_msg.commands[f"teleop_action_{self.teleop_controller}"][2]*self.dt,
+                -command_msg.commands[f"teleop_action_{self.teleop_controller}"][3]*self.dt,
+                -command_msg.commands[f"teleop_action_{self.teleop_controller}"][4]*self.dt,
+                -command_msg.commands[f"teleop_action_{self.teleop_controller}"][5]*self.dt,
+            ]
+            # self._logger.info(f"{command_msg.commands[f"teleop_action_{self.teleop_controller}"]}")
+            self.gripper_command = command_msg.commands[f"teleop_action_{self.teleop_controller}"][6]
+            # self._logger.info(f"{self.gripper_command}")
         if "position_command_plus_gripper" in command_msg.commands.keys():
             self.position_command_plus_gripper = command_msg.commands["position_command_plus_gripper"]
 
