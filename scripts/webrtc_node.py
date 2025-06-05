@@ -1,4 +1,5 @@
 #! /usr/bin/env python3
+import socket
 import time
 
 import cv2
@@ -26,7 +27,6 @@ ROBOT_STATE_CHANNEL = "robot_state"
 class WebRTCNode(Node):
     def __init__(self):
         super().__init__('webrtc')
-        self.declare_parameter('ip', '127.0.0.1')
         self.declare_parameter('port', 9999)
         
         self.left_state_msg = None
@@ -89,14 +89,13 @@ class WebRTCNode(Node):
                 continue
 
             if self.left_state_msg is not None:
-                # self._logger.info("sending robot state")
                 self.rtc.send_channel(ROBOT_STATE_CHANNEL, self.left_state_msg)
 
             if self.position_command_msg is not None:
-                # self._logger.info("sending position command")
                 self.rtc.send_channel("position_command_plus_gripper", self.position_command_msg)
-            # if self.right_state_msg is not None:
-            #     self.rtc.send_channel(ROBOT_STATE_CHANNEL, self.right_state_msg)
+
+            if self.right_state_msg is not None:
+                self.rtc.send_channel(ROBOT_STATE_CHANNEL, self.right_state_msg)
             end = time.time()
             await asyncio.sleep(0.01 - (end - start))
 
@@ -105,55 +104,29 @@ class WebRTCNode(Node):
             rclpy.spin_once(self, timeout_sec=0)
             await asyncio.sleep(1e-4)
 
-    async def add_tracks(self):
-        await asyncio.sleep(3)
-        track = CV2VideoStreamTrack(4, verbose=False)
-        # track = VideoStreamTrack()
-        asyncio.ensure_future(track.update())
-        await self.rtc.add_track_after_connect(track, "video_ee")
-        # await self.rtc.add_track_after_connect(ZerosStreamTrack(), "video_ee")
-        # await asyncio.sleep(3)
-        # await self.rtc.add_track_after_connect(CV2VideoStreamTrack(10), "video_ee_right")
+    def start(self):
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
 
-    async def send_video_frames(self):
-        self.cap = cv2.VideoCapture(4)
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        # self.cap.set(cv2.CAP_PROP_BITRATE, bitrate)
-        self.frame_count = 0
-
-        while self.rtc.get_peer().connectionState != "connected":
-            await asyncio.sleep(0.2)
-        
-        while True:
-            self.frame_count += 1
-            try:
-                ret, frame = self.cap.read()
-                if not ret:
-                    if self.verbose:
-                        print("Failed to read frame from camera")
-                    frame = np.zeros([480,640,3], dtype=np.uint8)
-            except:
-                frame = np.zeros([480,640,3], dtype=np.uint8)
-            finally:
-                data = {}
-                data["data"] = frame.tolist()
-                self.rtc.send_channel("video_ee", data)
-
-    def start(self):        
+        left_track = CV2VideoStreamTrack(10)
+        right_track = CV2VideoStreamTrack(4)
         self.rtc = (WebRTCConnection()
                     .add_channel(ROBOT_COMMAND_CHANNEL, lambda msg: self.handle_msg(ROBOT_COMMAND_CHANNEL, msg))
                     .add_channel(ROBOT_STATE_CHANNEL)
                     .add_channel("position_command_plus_gripper")
-                    # .add_channel("video_ee")
+                    .add_track(left_track, "video_ee_left")
+                    .add_track(right_track, "video_ee_right")
         )
 
         future = asyncio.wait(
             [
                 self.spin(),
                 self.send_robot_state(),
-                self.rtc.start_connection(self.get_parameter('ip').value, self.get_parameter('port').value, False),
-                self.add_tracks()
-                # self.send_video_frames()
+                self.rtc.start_connection(ip, self.get_parameter('port').value, True),
+                left_track.update(),
+                right_track.update()
             ], 
             return_when=asyncio.FIRST_EXCEPTION
         )

@@ -10,8 +10,8 @@ def generate_launch_description():
         name = 'teleop',
         output = 'screen',
         parameters=[{
-            'dt': 0.02,
-            'starting_pose': [-0.0107, -0.2286, 0.2291, 0.0077, 1.3668, -0.0674]}]
+            'dt': 0.1,
+            'starting_pose': [-0.0107, -0.2286, 0.2991, 0.0077, 1.3668, -0.0674]}]
     )
 
     right_teleop_node = Node(
@@ -29,9 +29,7 @@ def generate_launch_description():
         executable = 'webrtc_node.py',
         name = 'webrtc',
         output = 'screen',
-        emulate_tty = True,
-        parameters=[{'ip': '192.168.200.138', 
-                     'port': 9999}]
+        emulate_tty = True
     )
 
     return LaunchDescription([
