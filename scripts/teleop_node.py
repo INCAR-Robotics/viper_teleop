@@ -72,7 +72,7 @@ class TeleopNode(Node):
             pose[5],
             float(self.gripper_command)
         ]
-
+        self._logger.info(f"dt is {self.dt}")
         self.publishing_loop()
         self.create_timer(self.dt, self.publishing_loop)
 
@@ -126,10 +126,10 @@ class TeleopNode(Node):
         if not self.is_engaged or time.time() - self.last_command_received > COMMAND_TIMEOUT:
             return
 
-        if max(self.command[:3]) > 0.2*self.dt or min(self.command[:3]) < -0.2*self.dt:
+        if max(self.command[:3]) > 0.25*self.dt or min(self.command[:3]) < -0.25*self.dt:
             self._logger.info("EXCEEDED LINEAR LIMITS")
             return
-        if max(self.command[3:6]) > 1*self.dt or min(self.command[3:6]) < -1*self.dt:
+        if max(self.command[3:6]) > 2*self.dt or min(self.command[3:6]) < -2*self.dt:
             self._logger.info("EXCEEDED ANGULAR LIMITS")
             return
         
@@ -171,7 +171,7 @@ class TeleopNode(Node):
         _, succes = self.bot.arm.set_ee_pose_matrix(
             T_base_target,
             custom_guess=self.bot.arm.get_joint_positions(),
-            moving_time=self.dt*2,
+            moving_time=self.dt*1.1,
             blocking=False
         )
 

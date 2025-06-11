@@ -10,7 +10,7 @@ def generate_launch_description():
         name = 'teleop',
         output = 'screen',
         parameters=[{
-            'dt': 0.1,
+            'dt': 0.01,
             'starting_pose': [-0.0107, -0.2286, 0.2991, 0.0077, 1.3668, -0.0674]}]
     )
 
