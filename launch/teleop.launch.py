@@ -11,7 +11,8 @@ def generate_launch_description():
         output = 'screen',
         parameters=[{
             'dt': 0.01,
-            'starting_pose': [-0.0107, -0.2286, 0.2991, 0.0077, 1.3668, -0.0674]}]
+            'starting_pose': [-0.8483, -0.2638, 0.4955, 1.6076, 1.6245, -0.2884],
+            'start_with_gripper_open': False}]
     )
 
     right_teleop_node = Node(

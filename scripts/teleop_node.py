@@ -35,6 +35,7 @@ class TeleopNode(Node):
             robot_name= self.get_namespace()[1:],
             group_name='arm',
             gripper_name='gripper',
+            gripper_pressure=1.0
         )
 
         robot_startup()
@@ -92,7 +93,6 @@ class TeleopNode(Node):
         if not f"teleop_action_{self.teleop_controller}" in command_msg.commands.keys():
             self._logger.info("No teleop control command")
             self.command = [0, 0, 0, 0, 0, 0]
-            self.gripper_command = 0
         else:
             self.command = [
                 command_msg.commands[f"teleop_action_{self.teleop_controller}"][0]*self.dt,
@@ -105,8 +105,8 @@ class TeleopNode(Node):
             # self._logger.info(f"{command_msg.commands[f"teleop_action_{self.teleop_controller}"]}")
             self.gripper_command = command_msg.commands[f"teleop_action_{self.teleop_controller}"][6]
             # self._logger.info(f"{self.gripper_command}")
-        if "position_command_plus_gripper" in command_msg.commands.keys():
-            self.position_command_plus_gripper = command_msg.commands["position_command_plus_gripper"]
+        # if "position_command_plus_gripper" in command_msg.commands.keys():
+        #     self.position_command_plus_gripper = command_msg.commands["position_command_plus_gripper"]
 
         if GO_HOME_COMMAND in command_msg.string_commands[self.teleop_controller]:
             self.is_engaged = False
@@ -134,9 +134,9 @@ class TeleopNode(Node):
             return
         
 
-        if max(self.command) == 0:
-            self._logger.info("did not get any left/right velocity commands, going to position_command_plus_gripper")
-            self.gripper_command = self.position_command_plus_gripper[-1]
+        # if max(self.command) == 0:
+        #     self._logger.info("did not get any left/right velocity commands, going to position_command_plus_gripper")
+        #     self.gripper_command = self.position_command_plus_gripper[-1]
 
     
         if self.gripper_command > 0.75 and self.gripper_is_open:
@@ -148,25 +148,25 @@ class TeleopNode(Node):
             self.bot.gripper.release(0)
             self.gripper_is_open = True
 
-        # Control the arm
-        if max(self.command) == 0:
-            old_pose = get_pose_from_transform(self.current_pose)
-            if max(abs(np.array(old_pose[:3]) - np.array(self.position_command_plus_gripper[:3]))) > 0.4*self.dt:
-                self._logger.info("EXCEEDED LINEAR LIMITS")
-                return
-            if max(abs(np.array(old_pose[3:]) - np.array(self.position_command_plus_gripper[3:6]))) > 2*self.dt:
-                self._logger.info("EXCEEDED ANGULAR LIMITS")
-                return
+        # # Control the arm
+        # if max(self.command) == 0:
+        #     old_pose = get_pose_from_transform(self.current_pose)
+        #     if max(abs(np.array(old_pose[:3]) - np.array(self.position_command_plus_gripper[:3]))) > 0.4*self.dt:
+        #         self._logger.info("EXCEEDED LINEAR LIMITS")
+        #         return
+        #     if max(abs(np.array(old_pose[3:]) - np.array(self.position_command_plus_gripper[3:6]))) > 2*self.dt:
+        #         self._logger.info("EXCEEDED ANGULAR LIMITS")
+        #         return
             
-            T_base_target = np.identity(4)
-            T_base_target[:3, :3] = euler_matrix(self.position_command_plus_gripper[3],
-                                         self.position_command_plus_gripper[4],
-                                         self.position_command_plus_gripper[5])[:3, :3]
-            T_base_target[:3, 3] = self.position_command_plus_gripper[:3]
-        else:
-            T_base_target = np.identity(4)
-            T_base_target[:3, :3] = euler_matrix(self.command[3], self.command[4], self.command[5])[:3, :3] @ self.current_pose[:3, :3]
-            T_base_target[:3, 3] = self.current_pose[:3, 3] + self.command[:3]
+        #     T_base_target = np.identity(4)
+        #     T_base_target[:3, :3] = euler_matrix(self.position_command_plus_gripper[3],
+        #                                  self.position_command_plus_gripper[4],
+        #                                  self.position_command_plus_gripper[5])[:3, :3]
+        #     T_base_target[:3, 3] = self.position_command_plus_gripper[:3]
+        # else:
+        T_base_target = np.identity(4)
+        T_base_target[:3, :3] = euler_matrix(self.command[3], self.command[4], self.command[5])[:3, :3] @ self.current_pose[:3, :3]
+        T_base_target[:3, 3] = self.current_pose[:3, 3] + self.command[:3]
 
         _, succes = self.bot.arm.set_ee_pose_matrix(
             T_base_target,
@@ -189,7 +189,7 @@ class TeleopNode(Node):
             pose[3],
             pose[4],
             pose[5],
-            float(self.gripper_command)
+            float(self.bot.gripper.get_gripper_position())
         ]
         state_msg.data = msg
         self.ee_state_publisher.publish(state_msg)
