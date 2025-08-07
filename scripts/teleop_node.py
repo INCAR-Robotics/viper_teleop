@@ -1,4 +1,5 @@
 #! /usr/bin/env python3
+import math
 import time
 import rclpy
 from rclpy.node import Node
@@ -12,7 +13,9 @@ from std_msgs.msg import String, Float32MultiArray
 
 import numpy as np
 from tf_transformations import euler_matrix
-from incar.messages import RobotCommandMessage, GO_HOME_COMMAND
+from incar.messages import RobotCommandMessage, GO_HOME_ROUTINE, REMOVE_CAP_ROUTINE
+from routines import SetpointRoutine, RemoveCapRoutine
+
 
 COMMAND_TIMEOUT = 0.2
 
@@ -37,6 +40,13 @@ class TeleopNode(Node):
             gripper_name='gripper',
             gripper_pressure=1.0
         )
+
+        self.routine_dict = {
+            GO_HOME_ROUTINE: SetpointRoutine(self.get_parameter('starting_pose').value),
+            REMOVE_CAP_ROUTINE: RemoveCapRoutine()
+        }
+        self.buffered_routine = None
+        self.is_running_routine = False
 
         robot_startup()
 
@@ -91,7 +101,6 @@ class TeleopNode(Node):
         command_msg = RobotCommandMessage.from_json(msg.data)
         
         if not f"teleop_action_{self.teleop_controller}" in command_msg.commands.keys():
-            self._logger.info("No teleop control command")
             self.command = [0, 0, 0, 0, 0, 0]
         else:
             self.command = [
@@ -102,27 +111,29 @@ class TeleopNode(Node):
                 -command_msg.commands[f"teleop_action_{self.teleop_controller}"][4]*self.dt,
                 -command_msg.commands[f"teleop_action_{self.teleop_controller}"][5]*self.dt,
             ]
-            # self._logger.info(f"{command_msg.commands[f"teleop_action_{self.teleop_controller}"]}")
             self.gripper_command = command_msg.commands[f"teleop_action_{self.teleop_controller}"][6]
-            # self._logger.info(f"{self.gripper_command}")
-        # if "position_command_plus_gripper" in command_msg.commands.keys():
-        #     self.position_command_plus_gripper = command_msg.commands["position_command_plus_gripper"]
 
-        if GO_HOME_COMMAND in command_msg.string_commands[self.teleop_controller]:
-            self.is_engaged = False
-            self.bot.arm.set_joint_positions(self.get_parameter('starting_pose').value, moving_time=3, blocking=True)
-            self.current_pose = self.bot.arm.get_ee_pose()
-            if self.get_parameter('start_with_gripper_open').value:
-                self.bot.gripper.release()
-                self.gripper_is_open = True
-            else:
-                self.bot.gripper.grasp()
-                self.gripper_is_open = False
-            self.is_engaged = True
+        if command_msg.routines[self.teleop_controller] in self.routine_dict:
+            self.buffered_routine = self.routine_dict[command_msg.routines[self.teleop_controller]]
 
         self.last_command_received = time.time()
 
     def control_loop(self):
+        if self.is_running_routine:
+            self._logger.info("Skipping control loop due to routine")
+            return
+        
+        if self.buffered_routine is not None:
+            self._logger.info("going to run buffered_routine")
+            self.is_running_routine = True
+            time.sleep(0.1)
+            self.buffered_routine.execute(self.bot, self._logger)
+            self.current_pose = self.bot.arm.get_ee_pose()
+            self.buffered_routine = None
+            self._logger.info("Ran buffered routine")
+            self.is_running_routine = False
+            return
+        
         if not self.is_engaged or time.time() - self.last_command_received > COMMAND_TIMEOUT:
             return
 
@@ -132,12 +143,6 @@ class TeleopNode(Node):
         if max(self.command[3:6]) > 2*self.dt or min(self.command[3:6]) < -2*self.dt:
             self._logger.info("EXCEEDED ANGULAR LIMITS")
             return
-        
-
-        # if max(self.command) == 0:
-        #     self._logger.info("did not get any left/right velocity commands, going to position_command_plus_gripper")
-        #     self.gripper_command = self.position_command_plus_gripper[-1]
-
     
         if self.gripper_command > 0.75 and self.gripper_is_open:
             self._logger.info("GRASPING")
@@ -148,22 +153,6 @@ class TeleopNode(Node):
             self.bot.gripper.release(0)
             self.gripper_is_open = True
 
-        # # Control the arm
-        # if max(self.command) == 0:
-        #     old_pose = get_pose_from_transform(self.current_pose)
-        #     if max(abs(np.array(old_pose[:3]) - np.array(self.position_command_plus_gripper[:3]))) > 0.4*self.dt:
-        #         self._logger.info("EXCEEDED LINEAR LIMITS")
-        #         return
-        #     if max(abs(np.array(old_pose[3:]) - np.array(self.position_command_plus_gripper[3:6]))) > 2*self.dt:
-        #         self._logger.info("EXCEEDED ANGULAR LIMITS")
-        #         return
-            
-        #     T_base_target = np.identity(4)
-        #     T_base_target[:3, :3] = euler_matrix(self.position_command_plus_gripper[3],
-        #                                  self.position_command_plus_gripper[4],
-        #                                  self.position_command_plus_gripper[5])[:3, :3]
-        #     T_base_target[:3, 3] = self.position_command_plus_gripper[:3]
-        # else:
         T_base_target = np.identity(4)
         T_base_target[:3, :3] = euler_matrix(self.command[3], self.command[4], self.command[5])[:3, :3] @ self.current_pose[:3, :3]
         T_base_target[:3, 3] = self.current_pose[:3, 3] + self.command[:3]
