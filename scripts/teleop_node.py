@@ -2,6 +2,7 @@
 import math
 import time
 import rclpy
+from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
 from rclpy.qos import ReliabilityPolicy, HistoryPolicy, QoSProfile
 from rclpy.wait_for_message import wait_for_message
@@ -13,8 +14,8 @@ from std_msgs.msg import String, Float32MultiArray
 
 import numpy as np
 from tf_transformations import euler_matrix
-from incar.messages import RobotCommandMessage, GO_HOME_ROUTINE, REMOVE_CAP_ROUTINE
-from routines import SetpointRoutine, RemoveCapRoutine
+from incar.messages import RobotCommandMessage, GO_HOME_ROUTINE, REMOVE_CAP_ROUTINE, DYNAMIC_SETPOINT_ROUTINE, SET_SETPOINT_ROUTINE
+from routines import SetpointRoutine, RemoveCapRoutine, DynamicSetpointRoutine, SetSetpointRoutine
 
 
 COMMAND_TIMEOUT = 0.2
@@ -43,7 +44,9 @@ class TeleopNode(Node):
 
         self.routine_dict = {
             GO_HOME_ROUTINE: SetpointRoutine(self.get_parameter('starting_pose').value),
-            REMOVE_CAP_ROUTINE: RemoveCapRoutine()
+            REMOVE_CAP_ROUTINE: RemoveCapRoutine(),
+            DYNAMIC_SETPOINT_ROUTINE: DynamicSetpointRoutine('~/test.json', 'X'),
+            SET_SETPOINT_ROUTINE: SetSetpointRoutine('~/test.json', 'X')
         }
         self.buffered_routine = None
         self.is_running_routine = False
@@ -85,7 +88,7 @@ class TeleopNode(Node):
         ]
         self._logger.info(f"dt is {self.dt}")
         self.publishing_loop()
-        self.create_timer(self.dt, self.publishing_loop)
+        self.create_timer(self.dt, self.publishing_loop, ReentrantCallbackGroup())
 
         _, command_msg = wait_for_message(String, self, '/robot_commands', qos_profile=teleop_qos)
         self.current_command = json.loads(command_msg.data)
@@ -95,7 +98,7 @@ class TeleopNode(Node):
         self.create_subscription(String, '/robot_commands', self.command_callback, teleop_qos)
 
         self._logger.info("Command received, starting control loop!")
-        self.create_timer(self.dt, self.control_loop)
+        self.create_timer(self.dt, self.control_loop, ReentrantCallbackGroup())
         
     def command_callback(self, msg):  
         command_msg = RobotCommandMessage.from_json(msg.data)

@@ -1,5 +1,7 @@
 from abc import ABC, abstractmethod
+import json
 import math
+import os
 import time
 
 from interbotix_xs_modules.xs_robot.arm import InterbotixManipulatorXS
@@ -21,6 +23,41 @@ class SetpointRoutine(Routine):
         bot.arm.set_trajectory_time(5)
         bot.arm.set_joint_positions(self.joint_positions, moving_time=5, blocking=True)
     
+
+class DynamicSetpointRoutine(Routine):
+    config_file: str = ""
+    key: str = ""
+
+    def __init__(self, cfg_file, key):
+        self.config_file = cfg_file
+        self.key = key
+
+    def execute(self, bot, logger):
+        with open(self.config_file, 'r') as f:
+            data = json.load(f)
+        joint_positions = data[self.key]
+
+        bot.arm.set_trajectory_time(5)
+        bot.arm.set_joint_positions(joint_positions, moving_time=5, blocking=True)
+
+class SetSetpointRoutine(Routine):
+    config_file: str = ""
+    key: str = ""
+
+    def __init__(self, cfg_file, key):
+        self.config_file = cfg_file
+        self.key = key
+
+    def execute(self, bot, logger):
+        joint_pos = bot.arm.get_joint_positions()
+
+        with open(self.config_file, 'r') as f:
+            data = json.load(f)
+            data[self.key] = joint_pos
+
+        os.remove(self.config_file)
+        with open(self.config_file, 'w') as f:
+            json.dump(data, f, indent=4)
 
 class RemoveCapRoutine(Routine):
     n_rotations = 3
