@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 import json
 import math
 import os
+import random
 import time
 
 from interbotix_xs_modules.xs_robot.arm import InterbotixManipulatorXS
@@ -23,6 +24,28 @@ class SetpointRoutine(Routine):
         bot.arm.set_trajectory_time(5)
         bot.arm.set_joint_positions(self.joint_positions, moving_time=5, blocking=True)
     
+class RandomRelativeXYPos(Routine):
+    x_lim: float = 0
+    y_lim: float = 0
+
+    def __init__(self, x_lim: float, y_lim: float):
+        self.x_lim = x_lim
+        self.y_lim = y_lim
+
+    def execute(self, bot, logger):
+        bot.arm.set_trajectory_time(2)
+        current_joint_positions = bot.arm.get_joint_positions()
+        current_ee_pose = bot.arm.get_ee_pose()
+
+        target_ee_pose = current_ee_pose
+        target_ee_pose[0, 3] = current_ee_pose[0,3] + random.uniform(-self.x_lim, self.x_lim)
+        target_ee_pose[1, 3] = current_ee_pose[1,3] + random.uniform(-self.y_lim, self.y_lim)
+        bot.arm.set_ee_pose_matrix(
+            target_ee_pose,
+            custom_guess=current_joint_positions,
+            moving_time=2,
+            blocking=True
+        )
 
 class DynamicSetpointRoutine(Routine):
     config_file: str = ""

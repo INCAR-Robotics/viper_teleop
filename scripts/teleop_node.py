@@ -15,8 +15,8 @@ from std_msgs.msg import String, Float32MultiArray
 
 import numpy as np
 from tf_transformations import euler_matrix
-from incar.messages import RobotCommandMessage, GO_HOME_ROUTINE, REMOVE_CAP_ROUTINE, DYNAMIC_SETPOINT_ROUTINE, SET_SETPOINT_ROUTINE
-from routines import SetpointRoutine, RemoveCapRoutine, DynamicSetpointRoutine, SetSetpointRoutine
+from incar.messages import RobotCommandMessage, GO_HOME_ROUTINE, ROUTINE_B, ROUTINE_C, ROUTINE_D, ROUTINE_E, ROUTINE_F, ROUTINE_G, ROUTINE_H, ROUTINE_I
+from routines import SetpointRoutine, RemoveCapRoutine, RandomRelativeXYPos, DynamicSetpointRoutine, SetSetpointRoutine
 
 
 COMMAND_TIMEOUT = 0.2
@@ -45,9 +45,10 @@ class TeleopNode(Node):
 
         self.routine_dict = {
             GO_HOME_ROUTINE: SetpointRoutine(self.get_parameter('starting_pose').value),
-            REMOVE_CAP_ROUTINE: RemoveCapRoutine(),
-            DYNAMIC_SETPOINT_ROUTINE: DynamicSetpointRoutine('~/test.json', 'X'),
-            SET_SETPOINT_ROUTINE: SetSetpointRoutine('~/test.json', 'X')
+            ROUTINE_B: RemoveCapRoutine(),
+            ROUTINE_C: RandomRelativeXYPos(0.08, 0.15),
+            # ROUTINE_D: DynamicSetpointRoutine('~/test.json', 'X'),
+            # ROUTINE_E: SetSetpointRoutine('~/test.json', 'X')
         }
         self.buffered_routine = None
         self.is_running_routine = False
