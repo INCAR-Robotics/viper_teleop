@@ -86,28 +86,32 @@ class RemoveCapRoutine(Routine):
     n_rotations = 3
     def execute(self, bot, logger):
         current_joint_positions = bot.arm.get_joint_positions()
-        bot.arm.set_trajectory_time(2)
+        logger.info(f"initial pos: {current_joint_positions}")
+        bot.arm.set_trajectory_time(1)
 
-        target_positions = current_joint_positions
+        target_positions = current_joint_positions.copy()
         target_positions[5] = current_joint_positions[5] + math.pi / 4
-        bot.arm.set_joint_positions(target_positions, moving_time=2, blocking=True)
+        bot.arm.set_joint_positions(target_positions, moving_time=1, blocking=True)
 
         for i in range(self.n_rotations):
-            bot.gripper.grasp(0.5)
+            bot.gripper.grasp(0.2)
 
-            target_positions = current_joint_positions
+            target_positions = current_joint_positions.copy()
             target_positions[5] = current_joint_positions[5] - math.pi / 4
-            bot.arm.set_joint_positions(target_positions, moving_time=2, blocking=True)
+            bot.arm.set_joint_positions(target_positions, moving_time=1, blocking=True)
 
-            bot.gripper.release(0.5)
+            bot.gripper.release(0.2)
 
-            target_positions = current_joint_positions
+            target_positions = current_joint_positions.copy()
             target_positions[5] = current_joint_positions[5] + math.pi / 4
-            bot.arm.set_joint_positions(target_positions, moving_time=2, blocking=True)
+            bot.arm.set_joint_positions(target_positions, moving_time=1, blocking=True)
 
-        bot.arm.set_joint_positions(current_joint_positions, moving_time=2, blocking=True)
+        logger.info(f"current pos: {target_positions}")
+        logger.info(f"current actual pos: {bot.arm.get_joint_positions()}")
+        logger.info(f"next target: {current_joint_positions}")
+        bot.arm.set_joint_positions(current_joint_positions, moving_time=1, blocking=True)
         
-        bot.gripper.grasp(0.5)
+        bot.gripper.grasp(0.2)
 
         current_ee_pose = bot.arm.get_ee_pose()
         target_ee_pose = current_ee_pose
@@ -115,6 +119,6 @@ class RemoveCapRoutine(Routine):
         bot.arm.set_ee_pose_matrix(
             target_ee_pose,
             custom_guess=current_joint_positions,
-            moving_time=2,
+            moving_time=1,
             blocking=True
         )
