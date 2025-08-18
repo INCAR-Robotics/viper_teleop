@@ -2,7 +2,8 @@
 import math
 import time
 import rclpy
-from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import ReliabilityPolicy, HistoryPolicy, QoSProfile
 from rclpy.wait_for_message import wait_for_message
@@ -88,7 +89,7 @@ class TeleopNode(Node):
         ]
         self._logger.info(f"dt is {self.dt}")
         self.publishing_loop()
-        self.create_timer(self.dt, self.publishing_loop, ReentrantCallbackGroup())
+        self.create_timer(self.dt, self.publishing_loop, MutuallyExclusiveCallbackGroup())
 
         _, command_msg = wait_for_message(String, self, '/robot_commands', qos_profile=teleop_qos)
         self.current_command = json.loads(command_msg.data)
@@ -98,7 +99,7 @@ class TeleopNode(Node):
         self.create_subscription(String, '/robot_commands', self.command_callback, teleop_qos)
 
         self._logger.info("Command received, starting control loop!")
-        self.create_timer(self.dt, self.control_loop, ReentrantCallbackGroup())
+        self.create_timer(self.dt, self.control_loop, MutuallyExclusiveCallbackGroup())
         
     def command_callback(self, msg):  
         command_msg = RobotCommandMessage.from_json(msg.data)
@@ -224,6 +225,16 @@ def get_pose_from_transform(transform):
 if __name__ == '__main__':
     rclpy.init()
     teleop_node = TeleopNode()
-    rclpy.spin(teleop_node)
-    teleop_node.destroy_node()
-    rclpy.shutdown()
+    executor = MultiThreadedExecutor(num_threads=4)
+    executor.add_node(teleop_node)
+    try:
+        executor.spin()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        teleop_node.destroy_node()
+        rclpy.shutdown()
+        exit(0)
+    # rclpy.spin(teleop_node)
+    # teleop_node.destroy_node()
+    # rclpy.shutdown()

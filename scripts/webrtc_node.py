@@ -140,8 +140,8 @@ class WebRTCNode(Node):
                     .add_channel(ROBOT_STATE_CHANNEL)
                     .add_channel("position_command_plus_gripper")
                     # .add_track(ZerosStreamTrack(), "dummy_track")
-                    .add_track(left_track, "video_ee")
-                    .add_track(right_track, "video_topview")
+                    .add_track(left_track, "video_left")
+                    .add_track(right_track, "video_right")
                     # .add_channel("video_ee")
                     # .add_channel("video_topview")
         )
@@ -153,6 +153,7 @@ class WebRTCNode(Node):
                 # self.send_video(4, "video_ee"),
                 # self.send_video(10, "video_topview"),
                 self.rtc.start_connection(ip, self.get_parameter('port').value, True),
+                # self.rtc.start_connection("127.0.0.1", self.get_parameter('port').value, True),
                 left_track.update(),
                 right_track.update()
             ], 
