@@ -21,8 +21,8 @@ class SetpointRoutine(Routine):
         self.joint_positions = joint_positions
 
     def execute(self, bot, logger):
-        bot.arm.set_trajectory_time(5)
-        bot.arm.set_joint_positions(self.joint_positions, moving_time=5, blocking=True)
+        bot.arm.set_trajectory_time(3)
+        bot.arm.set_joint_positions(self.joint_positions, moving_time=3, blocking=True)
     
 class RandomRelativeXYPos(Routine):
     x_lim: float = 0
@@ -83,7 +83,7 @@ class SetSetpointRoutine(Routine):
             json.dump(data, f, indent=4)
 
 class RemoveCapRoutine(Routine):
-    n_rotations = 3
+    n_rotations = 2
     def execute(self, bot, logger):
         current_joint_positions = bot.arm.get_joint_positions()
         logger.info(f"initial pos: {current_joint_positions}")
@@ -101,6 +101,7 @@ class RemoveCapRoutine(Routine):
             bot.arm.set_joint_positions(target_positions, moving_time=1, blocking=True)
 
             bot.gripper.release(0.2)
+            if i == self.n_rotations - 1: continue
 
             target_positions = current_joint_positions.copy()
             target_positions[5] = current_joint_positions[5] + math.pi / 4
@@ -115,7 +116,7 @@ class RemoveCapRoutine(Routine):
 
         current_ee_pose = bot.arm.get_ee_pose()
         target_ee_pose = current_ee_pose
-        target_ee_pose[2, 3] = current_ee_pose[2,3] + 0.05
+        target_ee_pose[2, 3] = current_ee_pose[2,3] + 0.15
         bot.arm.set_ee_pose_matrix(
             target_ee_pose,
             custom_guess=current_joint_positions,

@@ -133,15 +133,15 @@ class WebRTCNode(Node):
         ip = s.getsockname()[0]
         s.close()
 
-        left_track = CV2VideoStreamTrack(4)
-        right_track = CV2VideoStreamTrack(10)
+        left_track = CV2VideoStreamTrack(10)
+        # right_track = CV2VideoStreamTrack(4)
         self.rtc = (WebRTCConnection()
                     .add_channel(ROBOT_COMMAND_CHANNEL, lambda msg: self.handle_msg(ROBOT_COMMAND_CHANNEL, msg))
                     .add_channel(ROBOT_STATE_CHANNEL)
                     .add_channel("position_command_plus_gripper")
                     # .add_track(ZerosStreamTrack(), "dummy_track")
                     .add_track(left_track, "video_left")
-                    .add_track(right_track, "video_right")
+                    # .add_track(right_track, "video_right")
                     # .add_channel("video_ee")
                     # .add_channel("video_topview")
         )
@@ -155,7 +155,7 @@ class WebRTCNode(Node):
                 self.rtc.start_connection(ip, self.get_parameter('port').value, True),
                 # self.rtc.start_connection("127.0.0.1", self.get_parameter('port').value, True),
                 left_track.update(),
-                right_track.update()
+                # right_track.update()
             ], 
             return_when=asyncio.FIRST_EXCEPTION
         )

@@ -47,6 +47,8 @@ class TeleopNode(Node):
             GO_HOME_ROUTINE: SetpointRoutine(self.get_parameter('starting_pose').value),
             ROUTINE_B: RemoveCapRoutine(),
             ROUTINE_C: RandomRelativeXYPos(0.08, 0.15),
+            ROUTINE_D: SetpointRoutine([-1.1612, -0.1795, 0.4801, 1.5631, 1.6244, -0.3313]), # Right Setpoint
+            ROUTINE_E: SetpointRoutine([-0.1580, -0.6642, 0.8636, 1.7426, 0.9986, -0.2777]) # Left setpoint
             # ROUTINE_D: DynamicSetpointRoutine('~/test.json', 'X'),
             # ROUTINE_E: SetSetpointRoutine('~/test.json', 'X')
         }
@@ -102,8 +104,10 @@ class TeleopNode(Node):
         self._logger.info("Command received, starting control loop!")
         self.create_timer(self.dt, self.control_loop, MutuallyExclusiveCallbackGroup())
         
-    def command_callback(self, msg):  
+    def command_callback(self, msg):
+        self._logger.info("In command callback")  
         command_msg = RobotCommandMessage.from_json(msg.data)
+        self._logger.info(f"{command_msg}")
         
         if not f"teleop_action_{self.teleop_controller}" in command_msg.commands.keys():
             self.command = [0, 0, 0, 0, 0, 0]
