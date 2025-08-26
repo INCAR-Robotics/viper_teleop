@@ -6,3 +6,17 @@ syringe:
 
 cube: 
   left: [-0.0107, -0.2286, 0.2291, 0.0077, 1.3668, -0.0674]
+
+syringe_v2:
+  left: [-1.1612, -0.1795, 0.4801, 1.5631, 1.6244, -0.3313]
+  gripper_left: CLOSED
+  ROUTINE_D: SetpointRoutine([-1.1612, -0.1795, 0.4801, 1.5631, 1.6244, -0.3313]), # Right Setpoint
+  ROUTINE_E: SetpointRoutine([-0.1580, -0.6642, 0.8636, 1.7426, 0.9986, -0.2777]) # Left setpoint
+
+welding:
+  left: tbd
+  gripper_left: CLOSED
+
+unscrew_cap:
+  left: tbd
+  gripper_left: OPEN

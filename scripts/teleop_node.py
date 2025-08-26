@@ -1,6 +1,7 @@
 #! /usr/bin/env python3
 import math
 import time
+import traceback
 import rclpy
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
@@ -105,76 +106,81 @@ class TeleopNode(Node):
         self.create_timer(self.dt, self.control_loop, MutuallyExclusiveCallbackGroup())
         
     def command_callback(self, msg):
-        self._logger.info("In command callback")  
-        command_msg = RobotCommandMessage.from_json(msg.data)
-        self._logger.info(f"{command_msg}")
-        
-        if not f"teleop_action_{self.teleop_controller}" in command_msg.commands.keys():
-            self.command = [0, 0, 0, 0, 0, 0]
-        else:
-            self.command = [
-                command_msg.commands[f"teleop_action_{self.teleop_controller}"][0]*self.dt,
-                command_msg.commands[f"teleop_action_{self.teleop_controller}"][1]*self.dt,
-                command_msg.commands[f"teleop_action_{self.teleop_controller}"][2]*self.dt,
-                -command_msg.commands[f"teleop_action_{self.teleop_controller}"][3]*self.dt,
-                -command_msg.commands[f"teleop_action_{self.teleop_controller}"][4]*self.dt,
-                -command_msg.commands[f"teleop_action_{self.teleop_controller}"][5]*self.dt,
-            ]
-            self.gripper_command = command_msg.commands[f"teleop_action_{self.teleop_controller}"][6]
+        try:
+            command_msg = RobotCommandMessage.from_json(msg.data)
+            # self._logger.info(f"{command_msg}")
+            
+            if not f"teleop_action_{self.teleop_controller}" in command_msg.commands.keys():
+                self.command = [0, 0, 0, 0, 0, 0]
+            else:
+                self.command = [
+                    command_msg.commands[f"teleop_action_{self.teleop_controller}"][0]*self.dt,
+                    command_msg.commands[f"teleop_action_{self.teleop_controller}"][1]*self.dt,
+                    command_msg.commands[f"teleop_action_{self.teleop_controller}"][2]*self.dt,
+                    -command_msg.commands[f"teleop_action_{self.teleop_controller}"][3]*self.dt,
+                    -command_msg.commands[f"teleop_action_{self.teleop_controller}"][4]*self.dt,
+                    -command_msg.commands[f"teleop_action_{self.teleop_controller}"][5]*self.dt,
+                ]
+                self.gripper_command = command_msg.commands[f"teleop_action_{self.teleop_controller}"][6]
 
-        if command_msg.routines[self.teleop_controller] in self.routine_dict:
-            self.buffered_routine = self.routine_dict[command_msg.routines[self.teleop_controller]]
+            if command_msg.routines[self.teleop_controller] in self.routine_dict:
+                self.buffered_routine = self.routine_dict[command_msg.routines[self.teleop_controller]]
 
-        self.last_command_received = time.time()
+            self.last_command_received = time.time()
+        except Exception:
+            self._logger.info(traceback.print_exc())
 
     def control_loop(self):
-        if self.is_running_routine:
-            self._logger.info("Skipping control loop due to routine")
-            return
+        try:
+            if self.is_running_routine:
+                self._logger.info("Skipping control loop due to routine")
+                return
+            
+            if self.buffered_routine is not None:
+                self._logger.info("going to run buffered_routine")
+                self.is_running_routine = True
+                time.sleep(0.1)
+                self.buffered_routine.execute(self.bot, self._logger)
+                self.current_pose = self.bot.arm.get_ee_pose()
+                self.buffered_routine = None
+                self._logger.info("Ran buffered routine")
+                self.is_running_routine = False
+                return
+            
+            if not self.is_engaged or time.time() - self.last_command_received > COMMAND_TIMEOUT:
+                return
+
+            if max(self.command[:3]) > 0.25*self.dt or min(self.command[:3]) < -0.25*self.dt:
+                self._logger.info("EXCEEDED LINEAR LIMITS")
+                return
+            if max(self.command[3:6]) > 2*self.dt or min(self.command[3:6]) < -2*self.dt:
+                self._logger.info("EXCEEDED ANGULAR LIMITS")
+                return
         
-        if self.buffered_routine is not None:
-            self._logger.info("going to run buffered_routine")
-            self.is_running_routine = True
-            time.sleep(0.1)
-            self.buffered_routine.execute(self.bot, self._logger)
-            self.current_pose = self.bot.arm.get_ee_pose()
-            self.buffered_routine = None
-            self._logger.info("Ran buffered routine")
-            self.is_running_routine = False
-            return
-        
-        if not self.is_engaged or time.time() - self.last_command_received > COMMAND_TIMEOUT:
-            return
+            if self.gripper_command > 0.75 and self.gripper_is_open:
+                self._logger.info("GRASPING")
+                self.bot.gripper.grasp(0)
+                self.gripper_is_open = False
+            elif self.gripper_command < 0.25 and not self.gripper_is_open:
+                self._logger.info("RELEASING")
+                self.bot.gripper.release(0)
+                self.gripper_is_open = True
 
-        if max(self.command[:3]) > 0.25*self.dt or min(self.command[:3]) < -0.25*self.dt:
-            self._logger.info("EXCEEDED LINEAR LIMITS")
-            return
-        if max(self.command[3:6]) > 2*self.dt or min(self.command[3:6]) < -2*self.dt:
-            self._logger.info("EXCEEDED ANGULAR LIMITS")
-            return
-    
-        if self.gripper_command > 0.75 and self.gripper_is_open:
-            self._logger.info("GRASPING")
-            self.bot.gripper.grasp(0)
-            self.gripper_is_open = False
-        elif self.gripper_command < 0.25 and not self.gripper_is_open:
-            self._logger.info("RELEASING")
-            self.bot.gripper.release(0)
-            self.gripper_is_open = True
+            T_base_target = np.identity(4)
+            T_base_target[:3, :3] = euler_matrix(self.command[3], self.command[4], self.command[5])[:3, :3] @ self.current_pose[:3, :3]
+            T_base_target[:3, 3] = self.current_pose[:3, 3] + self.command[:3]
 
-        T_base_target = np.identity(4)
-        T_base_target[:3, :3] = euler_matrix(self.command[3], self.command[4], self.command[5])[:3, :3] @ self.current_pose[:3, :3]
-        T_base_target[:3, 3] = self.current_pose[:3, 3] + self.command[:3]
+            _, succes = self.bot.arm.set_ee_pose_matrix(
+                T_base_target,
+                custom_guess=self.bot.arm.get_joint_positions(),
+                moving_time=self.dt*1.1,
+                blocking=False
+            )
 
-        _, succes = self.bot.arm.set_ee_pose_matrix(
-            T_base_target,
-            custom_guess=self.bot.arm.get_joint_positions(),
-            moving_time=self.dt*1.1,
-            blocking=False
-        )
-
-        if succes:
-            self.current_pose = T_base_target
+            if succes:
+                self.current_pose = T_base_target
+        except Exception:
+            self._logger.info(traceback.print_exc())
 
     def publishing_loop(self):
         current_robot_pose = self.bot.arm.get_ee_pose()
@@ -230,16 +236,15 @@ def get_pose_from_transform(transform):
 if __name__ == '__main__':
     rclpy.init()
     teleop_node = TeleopNode()
-    executor = MultiThreadedExecutor(num_threads=4)
+    executor = MultiThreadedExecutor(num_threads=8)
     executor.add_node(teleop_node)
     try:
         executor.spin()
+        print("spinning stopped")
     except KeyboardInterrupt:
         pass
     finally:
+        print("Going to destroy node")
         teleop_node.destroy_node()
         rclpy.shutdown()
         exit(0)
-    # rclpy.spin(teleop_node)
-    # teleop_node.destroy_node()
-    # rclpy.shutdown()
