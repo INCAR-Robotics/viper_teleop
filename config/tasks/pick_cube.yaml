@@ -1,0 +1,36 @@
+left:
+  teleop:
+    ros__parameters:
+      enabled: true
+      dt: 0.01
+      home_position: &home_left [-0.8483, -0.2638, 0.4955, 1.6076, 1.6245, -0.2884]
+      start_with_gripper_open: false
+      gripper_enabled: false
+
+      routines: 
+        '[
+          {
+            "type": "SetpointRoutine",
+            "params":
+            {
+              "joint_positions": [-1.1612, -0.1795, 0.4801, 1.5631, 1.6244, -0.3313]
+            }
+          }, 
+          {
+            "type": "SetpointRoutine",
+            "params":
+            {
+              "joint_positions": [-0.1580, -0.6642, 0.8636, 1.7426, 0.9986, -0.2777]
+            }
+          }
+        ]'
+right:
+  teleop:
+    ros__parameters:
+      enabled: false
+
+web_rtc:
+  ros__parameters:
+    cameras:
+      video_left: 4
+      video_right: 4

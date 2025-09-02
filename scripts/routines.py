@@ -3,10 +3,33 @@ import json
 import math
 import os
 import random
+import sys
 import time
 
 from interbotix_xs_modules.xs_robot.arm import InterbotixManipulatorXS
 
+def parse_routines(config: list) -> list:
+    routine_list = []
+    for routine_config in config:
+        routine_type = routine_config['type']
+        routine_params = routine_config.get('params', {})
+        
+        try:
+            # Assumes the routine classes are in the same module
+            routine_class = getattr(sys.modules[__name__], routine_type)
+        except (ImportError, AttributeError) as e:
+            raise ValueError(f"Could not instantiate routine class {routine_type}: {e}")
+        
+        # Instantiate the routine with its parameters
+        try:
+            routine_instance = routine_class(**routine_params)
+        except Exception as e:
+            raise ValueError(f"Error instantiating {routine_type}: {e}")
+        
+        # Add to the routine dictionary
+        routine_list.append(routine_instance)
+    
+    return routine_list
 
 class Routine(ABC):
     @abstractmethod

@@ -3,7 +3,7 @@ import math
 import time
 import traceback
 import rclpy
-from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import ReliabilityPolicy, HistoryPolicy, QoSProfile
@@ -17,7 +17,7 @@ from std_msgs.msg import String, Float32MultiArray
 import numpy as np
 from tf_transformations import euler_matrix
 from incar.messages import RobotCommandMessage, GO_HOME_ROUTINE, ROUTINE_B, ROUTINE_C, ROUTINE_D, ROUTINE_E, ROUTINE_F, ROUTINE_G, ROUTINE_H, ROUTINE_I
-from routines import SetpointRoutine, RemoveCapRoutine, RandomRelativeXYPos, DynamicSetpointRoutine, SetSetpointRoutine
+from routines import parse_routines, SetpointRoutine, RemoveCapRoutine, RandomRelativeXYPos, DynamicSetpointRoutine, SetSetpointRoutine
 
 
 COMMAND_TIMEOUT = 0.2
@@ -25,17 +25,37 @@ COMMAND_TIMEOUT = 0.2
 class TeleopNode(Node):
     def __init__(self):
         super().__init__('teleop')
+        
+        # Check if this node should be started
+        self.declare_parameter('enabled', True)
+        start_node = self.get_parameter('enabled').get_parameter_value().bool_value
+        if not start_node:
+            return
+
         self.declare_parameter('dt', 0.02)
-        self.declare_parameter('starting_pose', [0.0107, 0.0169, 0.0276, -0.0077, 1.5693, 0.0123])
+        self.declare_parameter('home_position', [0.0107, 0.0169, 0.0276, -0.0077, 1.5693, 0.0123])
         self.declare_parameter('start_with_gripper_open', True)
+        self.declare_parameter('gripper_enabled', True)
+        self.declare_parameter('routines', "[]")
+        self.dt = self.get_parameter('dt').value
+        self.gripper_enabled = self.get_parameter('gripper_enabled').get_parameter_value().bool_value
+
+        routine_string = json.loads(self.get_parameter('routines').value)
+        self.routine_list = parse_routines(routine_string)
+        self._logger.info(f"{self.routine_list}")
+
         self._logger.info(f"Starting robot {self.get_namespace()}")
         if not self.get_namespace() in ['/left', '/right']:
             self._logger.error(f"Expected namespace to be either '/left' or '/right', but it was {self.get_namespace()}")
         self.teleop_controller = self.get_namespace()[1:]
-        self.dt = self.get_parameter('dt').value
+
+        # Initialize state
         self.is_engaged = True
         self.last_command_received = time.time()
+        self.buffered_routine = None
+        self.is_running_routine = False
 
+        # Initialize robot
         self.bot = InterbotixManipulatorXS(
             robot_model='vx300s',
             robot_name= self.get_namespace()[1:],
@@ -44,8 +64,10 @@ class TeleopNode(Node):
             gripper_pressure=1.0
         )
 
+        robot_startup()
+
         self.routine_dict = {
-            GO_HOME_ROUTINE: SetpointRoutine(self.get_parameter('starting_pose').value),
+            GO_HOME_ROUTINE: SetpointRoutine(self.get_parameter('home_position').value),
             ROUTINE_B: RemoveCapRoutine(),
             ROUTINE_C: RandomRelativeXYPos(0.08, 0.15),
             ROUTINE_D: SetpointRoutine([-1.1612, -0.1795, 0.4801, 1.5631, 1.6244, -0.3313]), # Right Setpoint
@@ -53,16 +75,12 @@ class TeleopNode(Node):
             # ROUTINE_D: DynamicSetpointRoutine('~/test.json', 'X'),
             # ROUTINE_E: SetSetpointRoutine('~/test.json', 'X')
         }
-        self.buffered_routine = None
-        self.is_running_routine = False
-
-        robot_startup()
 
         self.ee_state_publisher = self.create_publisher(Float32MultiArray, 'ee_state', 1)
         self.position_command_publisher = self.create_publisher(Float32MultiArray, 'position_command', 1)
 
-        # Initialise robot
-        self.bot.arm.set_joint_positions(self.get_parameter('starting_pose').value, moving_time=5, blocking=True)
+        # Initialise topics
+        self.bot.arm.set_joint_positions(self.get_parameter('home_position').value, moving_time=5, blocking=True)
         self.current_pose = self.bot.arm.get_ee_pose()
         if self.get_parameter('start_with_gripper_open').value:
             self.bot.gripper.release()
@@ -81,17 +99,6 @@ class TeleopNode(Node):
             depth = 1
         )
 
-        pose = get_pose_from_transform(self.current_pose)
-        self.position_command_plus_gripper = [
-            pose[0],
-            pose[1],
-            pose[2],
-            pose[3],
-            pose[4],
-            pose[5],
-            float(self.gripper_command)
-        ]
-        self._logger.info(f"dt is {self.dt}")
         self.publishing_loop()
         self.create_timer(self.dt, self.publishing_loop, MutuallyExclusiveCallbackGroup())
 
@@ -157,11 +164,11 @@ class TeleopNode(Node):
                 self._logger.info("EXCEEDED ANGULAR LIMITS")
                 return
         
-            if self.gripper_command > 0.75 and self.gripper_is_open:
+            if self.gripper_enabled and self.gripper_command > 0.75 and self.gripper_is_open:
                 self._logger.info("GRASPING")
                 self.bot.gripper.grasp(0)
                 self.gripper_is_open = False
-            elif self.gripper_command < 0.25 and not self.gripper_is_open:
+            elif self.gripper_enabled and self.gripper_command < 0.25 and not self.gripper_is_open:
                 self._logger.info("RELEASING")
                 self.bot.gripper.release(0)
                 self.gripper_is_open = True

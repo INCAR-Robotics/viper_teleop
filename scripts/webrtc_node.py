@@ -29,6 +29,10 @@ class WebRTCNode(Node):
     def __init__(self):
         super().__init__('webrtc')
         self.declare_parameter('port', 9999)
+        self.declare_parameter('local', False)
+        self.declare_parameter('stream_cameras', True)
+        self.declare_parameter('cameras', "{}")
+
         
         self.left_state_msg = None
         self.right_state_msg = None
@@ -128,35 +132,50 @@ class WebRTCNode(Node):
             await asyncio.sleep(1e-4)
 
     def start(self):
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
+        if self.get_parameter('local').get_parameter_value().bool_value:
+            ip = "127.0.0.1"
+        else:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
 
-        left_track = CV2VideoStreamTrack(10)
+
+        # left_track = CV2VideoStreamTrack(10)
         # right_track = CV2VideoStreamTrack(4)
         self.rtc = (WebRTCConnection()
                     .add_channel(ROBOT_COMMAND_CHANNEL, lambda msg: self.handle_msg(ROBOT_COMMAND_CHANNEL, msg))
                     .add_channel(ROBOT_STATE_CHANNEL)
                     .add_channel("position_command_plus_gripper")
                     # .add_track(ZerosStreamTrack(), "dummy_track")
-                    .add_track(left_track, "video_left")
+                    # .add_track(left_track, "video_left")
                     # .add_track(right_track, "video_right")
                     # .add_channel("video_ee")
                     # .add_channel("video_topview")
         )
+        tasks = [
+            self.spin(),
+            self.send_robot_state(),
+            # self.send_video(4, "video_ee"),
+            # self.send_video(10, "video_topview"),
+            self.rtc.start_connection(ip, self.get_parameter('port').value, True),
+            # self.rtc.start_connection("127.0.0.1", self.get_parameter('port').value, True),
+            # left_track.update(),
+            # right_track.update()
+        ]
+
+        camera_dict = json.loads(self.get_parameter('cameras').value)
+        if self.get_parameter('stream_cameras').get_parameter_value().bool_value:
+            for feature_name, camera_id in camera_dict.items():
+                track = CV2VideoStreamTrack(camera_id)
+                self.rtc.add_track(track, feature_name)
+                tasks.append(track.update())
+
+        self._logger.info(self.get_parameter('cameras').value)
+        self._logger.info(f"{camera_dict}")
 
         future = asyncio.wait(
-            [
-                self.spin(),
-                self.send_robot_state(),
-                # self.send_video(4, "video_ee"),
-                # self.send_video(10, "video_topview"),
-                self.rtc.start_connection(ip, self.get_parameter('port').value, True),
-                # self.rtc.start_connection("127.0.0.1", self.get_parameter('port').value, True),
-                left_track.update(),
-                # right_track.update()
-            ], 
+            tasks,
             return_when=asyncio.FIRST_EXCEPTION
         )
 
