@@ -42,7 +42,7 @@ class TeleopNode(Node):
 
         routine_string = json.loads(self.get_parameter('routines').value)
         self.routine_list = parse_routines(routine_string)
-        self._logger.info(f"{self.routine_list}")
+        self._logger.info(f"Loaded Routines: {self.routine_list}")
 
         self._logger.info(f"Starting robot {self.get_namespace()}")
         if not self.get_namespace() in ['/left', '/right']:
@@ -65,16 +65,6 @@ class TeleopNode(Node):
         )
 
         robot_startup()
-
-        self.routine_dict = {
-            GO_HOME_ROUTINE: SetpointRoutine(self.get_parameter('home_position').value),
-            ROUTINE_B: RemoveCapRoutine(),
-            ROUTINE_C: RandomRelativeXYPos(0.08, 0.15),
-            ROUTINE_D: SetpointRoutine([-1.1612, -0.1795, 0.4801, 1.5631, 1.6244, -0.3313]), # Right Setpoint
-            ROUTINE_E: SetpointRoutine([-0.1580, -0.6642, 0.8636, 1.7426, 0.9986, -0.2777]) # Left setpoint
-            # ROUTINE_D: DynamicSetpointRoutine('~/test.json', 'X'),
-            # ROUTINE_E: SetSetpointRoutine('~/test.json', 'X')
-        }
 
         self.ee_state_publisher = self.create_publisher(Float32MultiArray, 'ee_state', 1)
         self.position_command_publisher = self.create_publisher(Float32MultiArray, 'position_command', 1)
@@ -130,8 +120,8 @@ class TeleopNode(Node):
                 ]
                 self.gripper_command = command_msg.commands[f"teleop_action_{self.teleop_controller}"][6]
 
-            if command_msg.routines[self.teleop_controller] in self.routine_dict:
-                self.buffered_routine = self.routine_dict[command_msg.routines[self.teleop_controller]]
+            if command_msg.routines[self.teleop_controller] != -1:
+                self.buffered_routine = self.routine_list[command_msg.routines[self.teleop_controller]]
 
             self.last_command_received = time.time()
         except Exception:

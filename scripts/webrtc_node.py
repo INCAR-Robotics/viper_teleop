@@ -75,29 +75,6 @@ class WebRTCNode(Node):
             except Exception as e:
                 print(e)
 
-    # async def send_video(self, camera_idx, datachannel):
-    #     cap = cv2.VideoCapture(camera_idx)
-
-    #     while self.rtc.get_peer().connectionState != "connected":
-    #         await asyncio.sleep(3)
-
-    #     start = time.time()
-    #     while True:
-    #         try:
-    #             ret, frame = cap.read()
-    #             if not ret:
-    #                 self._logger.info(f"Failed to read frame from camera {camera_idx}")
-    #                 frame = np.zeros([480,640,3], dtype=np.uint8)
-    #         except Exception as e:
-    #             self._logger.info(f"{e}")
-    #             frame = np.zeros([480,640,3], dtype=np.uint8)
-    #         frame = cv2.resize(frame, (50, 50))
-    #         self._logger.info(f"Size of bytes: {sys.getsizeof(frame.tobytes())}")
-    #         self.rtc.send_channel_bytes(datachannel, frame.tobytes())
-    #         end = time.time()
-    #         await asyncio.sleep(0.1 - (end - start))
-    #         start = time.time()
-
     async def send_robot_state(self):
         while self.rtc.get_peer().connectionState != "connected":
             await asyncio.sleep(0.2)
@@ -140,39 +117,25 @@ class WebRTCNode(Node):
             ip = s.getsockname()[0]
             s.close()
 
-
-        # left_track = CV2VideoStreamTrack(10)
-        # right_track = CV2VideoStreamTrack(4)
         self.rtc = (WebRTCConnection()
-                    .add_channel(ROBOT_COMMAND_CHANNEL, lambda msg: self.handle_msg(ROBOT_COMMAND_CHANNEL, msg))
-                    .add_channel(ROBOT_STATE_CHANNEL)
-                    .add_channel("position_command_plus_gripper")
-                    # .add_track(ZerosStreamTrack(), "dummy_track")
-                    # .add_track(left_track, "video_left")
-                    # .add_track(right_track, "video_right")
-                    # .add_channel("video_ee")
-                    # .add_channel("video_topview")
+            .add_channel(ROBOT_COMMAND_CHANNEL, lambda msg: self.handle_msg(ROBOT_COMMAND_CHANNEL, msg))
+            .add_channel(ROBOT_STATE_CHANNEL)
+            .add_channel("position_command_plus_gripper")
         )
+
         tasks = [
             self.spin(),
             self.send_robot_state(),
-            # self.send_video(4, "video_ee"),
-            # self.send_video(10, "video_topview"),
             self.rtc.start_connection(ip, self.get_parameter('port').value, True),
-            # self.rtc.start_connection("127.0.0.1", self.get_parameter('port').value, True),
-            # left_track.update(),
-            # right_track.update()
         ]
 
         camera_dict = json.loads(self.get_parameter('cameras').value)
         if self.get_parameter('stream_cameras').get_parameter_value().bool_value:
+            self._logger.info(f"Opening Cameras: {camera_dict}")
             for feature_name, camera_id in camera_dict.items():
                 track = CV2VideoStreamTrack(camera_id)
                 self.rtc.add_track(track, feature_name)
                 tasks.append(track.update())
-
-        self._logger.info(self.get_parameter('cameras').value)
-        self._logger.info(f"{camera_dict}")
 
         future = asyncio.wait(
             tasks,

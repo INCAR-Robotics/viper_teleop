@@ -1,0 +1,38 @@
+left:
+  teleop:
+    ros__parameters:
+      enabled: true
+      dt: 0.01
+      home_position: &home_left [-0.0107, -0.2286, 0.2291, 0.0077, 1.3668, -0.0674]
+      start_with_gripper_open: true
+      gripper_enabled: true
+
+      routines:
+        '[
+          {
+            "type": "RemoveCapRoutine",
+            "params": { }
+          }
+        ]'
+
+right:
+  teleop:
+    ros__parameters:
+      enabled: true
+      dt: 0.01
+      home_position: &home_right [-0.0107, -0.2286, 0.2291, 0.0077, 1.3668, -0.0674]
+      start_with_gripper_open: true
+      gripper_enabled: true
+
+      routines: '[]'
+
+webrtc:
+  ros__parameters:
+    port: 9999
+    local: false
+    stream_cameras: true
+    cameras:
+      '{
+        "video_left": 10,
+        "video_right": 4
+      }'
