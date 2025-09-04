@@ -16,8 +16,8 @@ from std_msgs.msg import String, Float32MultiArray
 
 import numpy as np
 from tf_transformations import euler_matrix
-from incar.messages import RobotCommandMessage, GO_HOME_ROUTINE, ROUTINE_B, ROUTINE_C, ROUTINE_D, ROUTINE_E, ROUTINE_F, ROUTINE_G, ROUTINE_H, ROUTINE_I
-from routines import parse_routines, SetpointRoutine, RemoveCapRoutine, RandomRelativeXYPos, DynamicSetpointRoutine, SetSetpointRoutine
+from incar.messages import RobotCommandMessage
+from routines import parse_routines
 
 
 COMMAND_TIMEOUT = 0.2
@@ -97,6 +97,7 @@ class TeleopNode(Node):
         if type(self.current_command) is str:
             self.current_command = json.loads(self.current_command)
 
+
         self.create_subscription(String, '/robot_commands', self.command_callback, teleop_qos)
 
         self._logger.info("Command received, starting control loop!")
@@ -137,8 +138,14 @@ class TeleopNode(Node):
                 self._logger.info("going to run buffered_routine")
                 self.is_running_routine = True
                 time.sleep(0.1)
-                self.buffered_routine.execute(self.bot, self._logger)
+                self.buffered_routine.execute(self.bot, self._logger, self.current_pose)
                 self.current_pose = self.bot.arm.get_ee_pose()
+                if self.bot.gripper.get_gripper_position() > 1.35:
+                    self._logger.info("Gripper is open at the end of routine")
+                    self.gripper_is_open = True
+                else:
+                    self._logger.info("Gripper is closed at the end of routine")
+                    self.gripper_is_open = False
                 self.buffered_routine = None
                 self._logger.info("Ran buffered routine")
                 self.is_running_routine = False

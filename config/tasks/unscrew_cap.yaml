@@ -3,7 +3,7 @@ left:
     ros__parameters:
       enabled: true
       dt: 0.01
-      home_position: &home_left [-0.0107, -0.2286, 0.2291, 0.0077, 1.3668, -0.0674]
+      home_position: &home_left [0.7777, -0.4234, 0.5737, -0.7731, 1.5693, 1.7579]
       start_with_gripper_open: true
       gripper_enabled: true
 
@@ -12,6 +12,13 @@ left:
           {
             "type": "RemoveCapRoutine",
             "params": { }
+          },
+          {
+            "type": "SetpointRoutine",
+            "params": 
+            {
+              "joint_positions": [0.7777, -0.4234, 0.5737, -0.7731, 1.5693, 1.7579]
+            }
           }
         ]'
 
@@ -24,7 +31,21 @@ right:
       start_with_gripper_open: true
       gripper_enabled: true
 
-      routines: '[]'
+      routines: 
+        '[
+          {
+            "type": "RandomXYPos",
+            "params":
+            {
+              "x_upper": 0.49,
+              "x_lower": 0.29,
+              "y_upper": 0.56,
+              "y_lower": 0.26,
+              "z": 0.03,
+              "seed": 42
+            }
+          }
+        ]'
 
 webrtc:
   ros__parameters:

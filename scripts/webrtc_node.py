@@ -62,8 +62,8 @@ class WebRTCNode(Node):
         #         f'Could not transform {'world'} to {'left'}: {ex}')
 
         self.create_subscription(Float32MultiArray, '/left/ee_state', self.set_left_message, qos_profile=joint_state_qos)
-        self.create_subscription(Float32MultiArray, '/left/position_command', self.set_position_command_message, qos_profile=joint_state_qos)
-        # self.create_subscription(JointState, '/right/joint_states', self.set_right_message, qos_profile=joint_state_qos)
+        # self.create_subscription(Float32MultiArray, '/left/position_command', self.set_position_command_message, qos_profile=joint_state_qos)
+        self.create_subscription(Float32MultiArray, '/right/ee_state', self.set_right_message, qos_profile=joint_state_qos)
 
     def handle_msg(self, channel, msg):
         # self._logger.info(f"received message on channel: {channel}")
