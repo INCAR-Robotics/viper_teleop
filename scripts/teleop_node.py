@@ -146,6 +146,8 @@ class TeleopNode(Node):
                 else:
                     self._logger.info("Gripper is closed at the end of routine")
                     self.gripper_is_open = False
+                time.sleep(0.1)
+                # self.bot.arm.set_trajectory_time(self.dt*2)
                 self.buffered_routine = None
                 self._logger.info("Ran buffered routine")
                 self.is_running_routine = False

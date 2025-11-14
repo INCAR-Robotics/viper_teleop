@@ -1,0 +1,26 @@
+right:
+  teleop:
+    ros__parameters:
+      enabled: true
+      dt: 0.01
+      home_position: &home_left [-0.8483, -0.2638, 0.4955, 1.6076, 1.6245, -0.2884]
+      start_with_gripper_open: false
+      gripper_enabled: true
+
+      routines: '[]'
+
+left:
+  teleop:
+    ros__parameters:
+      enabled: false
+
+webrtc:
+  ros__parameters:
+    port: 9999
+    local: false
+    stream_cameras: true
+    cameras:
+      '{
+        "video_left": 10,
+        "video_right": 4
+      }'

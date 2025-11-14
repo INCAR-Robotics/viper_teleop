@@ -149,16 +149,16 @@ class RemoveCapRoutine(Routine):
 
         # Start by dropping half a centimeter because it was trained on that
         # before dropping got fixed
-        target_ee_pose = copy.copy(current_ee_pose_matrix)
-        target_ee_pose[2, 3] = current_ee_pose_matrix[2,3] - 0.005
+        # target_ee_pose = copy.copy(current_ee_pose_matrix)
+        # target_ee_pose[2, 3] = current_ee_pose_matrix[2,3] - 0.005
 
-        current_joint_positions = bot.arm.get_joint_positions()
-        bot.arm.set_ee_pose_matrix(
-            target_ee_pose,
-            custom_guess=current_joint_positions,
-            moving_time=0.5,
-            blocking=True
-        )
+        # current_joint_positions = bot.arm.get_joint_positions()
+        # bot.arm.set_ee_pose_matrix(
+        #     target_ee_pose,
+        #     custom_guess=current_joint_positions,
+        #     moving_time=0.5,
+        #     blocking=True
+        # )
 
         # Actual routine
         bot.arm.set_trajectory_time(1)

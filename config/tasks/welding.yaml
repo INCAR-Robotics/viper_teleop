@@ -3,24 +3,17 @@ left:
     ros__parameters:
       enabled: true
       dt: 0.01
-      home_position: &home_left [-0.8483, -0.2638, 0.4955, 1.6076, 1.6245, -0.2884]
+      home_position: &home_left [0.0291, -0.8330, 0.8161, -0.0383, 0.9695, 0.0414]
       start_with_gripper_open: false
-      gripper_enabled: true
+      gripper_enabled: false
 
-      routines:
+      routines: 
         '[
           {
             "type": "SetpointRoutine",
-            "params":
+            "params": 
             {
-              "joint_positions": [-1.6644, -0.3451, 0.5814, 1.5324, 1.7027, -0.2255]
-            }
-          }, 
-          {
-            "type": "SetpointRoutine",
-            "params":
-            {
-              "joint_positions": [-0.4357, -0.2209, 0.3942, 1.4757, 1.7748, -0.2347]
+              "joint_positions": [0.0291, -0.8330, 0.8161, -0.0383, 0.9695, 0.0414]
             }
           }
         ]'
