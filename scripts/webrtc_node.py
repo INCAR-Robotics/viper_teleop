@@ -62,8 +62,12 @@ class WebRTCNode(Node):
         #         f'Could not transform {'world'} to {'left'}: {ex}')
 
         self.create_subscription(Float32MultiArray, '/left/ee_state', self.set_left_message, qos_profile=joint_state_qos)
+        self.create_subscription(JointState, '/left/joint_states', self.send_left_efforts, qos_profile=joint_state_qos)
+        self.create_subscription(JointState, '/right/joint_states', self.send_right_efforts, qos_profile=joint_state_qos)
         # self.create_subscription(Float32MultiArray, '/left/position_command', self.set_position_command_message, qos_profile=joint_state_qos)
         self.create_subscription(Float32MultiArray, '/right/ee_state', self.set_right_message, qos_profile=joint_state_qos)
+
+        self.rtc_initialised = False
 
     def handle_msg(self, channel, msg):
         # self._logger.info(f"received message on channel: {channel}")
@@ -75,10 +79,36 @@ class WebRTCNode(Node):
             except Exception as e:
                 print(e)
 
+    # TODO: Any throttling?
+    def send_left_efforts(self, joint_state_msg: JointState):
+        if not self.rtc_initialised or self.rtc.get_peer().connectionState != "connected":
+            return
+        
+        if self.rtc.data_channels["left.efforts"].bufferedAmount != 0:
+            self._logger.info("[WARNING] NOT SENDING JOINT EFFORTS DUE TO FULL BUFFER")
+        
+        rtc_message = {}
+        rtc_message["data"] = list(joint_state_msg.effort)[:7]
+        self.rtc.send_channel("left.efforts", rtc_message)
+
+    def send_right_efforts(self, joint_state_msg: JointState):
+        if self.rtc.get_peer().connectionState != "connected":
+            return
+        
+        if self.rtc.data_channels["right.efforts"].bufferedAmount != 0:
+            self._logger.info("[WARNING] NOT SENDING JOINT EFFORTS DUE TO FULL BUFFER")
+        
+        rtc_message = {}
+        rtc_message["data"] = list(joint_state_msg.effort)[:7]
+        self.rtc.send_channel("right.efforts", rtc_message)
+    
     async def send_robot_state(self):
         while self.rtc.get_peer().connectionState != "connected":
             await asyncio.sleep(0.2)
         
+        await asyncio.sleep(0.2)
+        self.rtc_initialised = True
+
         while True:
             start = time.time()
 
@@ -87,16 +117,16 @@ class WebRTCNode(Node):
                 await asyncio.sleep(0.02 - (end - start))
                 continue
 
-            if self.rtc.data_channels["position_command_plus_gripper"].bufferedAmount != 0:
-                self._logger.info("[WARNING] NOT SENDING ROBOT STATE DUE TO FULL BUFFER")
-                await asyncio.sleep(0.02 - (end - start))
-                continue
+            # if self.rtc.data_channels["position_command_plus_gripper"].bufferedAmount != 0:
+            #     self._logger.info("[WARNING] NOT SENDING ROBOT STATE DUE TO FULL BUFFER")
+            #     await asyncio.sleep(0.02 - (end - start))
+            #     continue
 
             if self.left_state_msg is not None:
                 self.rtc.send_channel(ROBOT_STATE_CHANNEL, self.left_state_msg)
 
-            if self.position_command_msg is not None:
-                self.rtc.send_channel("position_command_plus_gripper", self.position_command_msg)
+            # if self.position_command_msg is not None:
+            #     self.rtc.send_channel("position_command_plus_gripper", self.position_command_msg)
 
             if self.right_state_msg is not None:
                 self.rtc.send_channel(ROBOT_STATE_CHANNEL, self.right_state_msg)
@@ -120,7 +150,8 @@ class WebRTCNode(Node):
         self.rtc = (WebRTCConnection()
             .add_channel(ROBOT_COMMAND_CHANNEL, lambda msg: self.handle_msg(ROBOT_COMMAND_CHANNEL, msg))
             .add_channel(ROBOT_STATE_CHANNEL)
-            .add_channel("position_command_plus_gripper")
+            .add_channel("left.efforts")
+            .add_channel("right.efforts")
         )
 
         tasks = [
