@@ -109,7 +109,7 @@ class TeleopNode(Node):
             gripper_command = message_obj.commands.get(f"{self.teleop_controller}.gripper")
 
             if arm_command is None:
-                self.command = [0, 0, 0, 0, 0]
+                self.command = [0, 0, 0, 0, 0, 0]
             else:
                 self.command = [
                     arm_command.values[0]*self.dt,

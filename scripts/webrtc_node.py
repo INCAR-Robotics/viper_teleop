@@ -58,8 +58,6 @@ class WebRTCNode(Node):
         if channel == ROBOT_COMMAND_CHANNEL:
             try:
                 ros_msg = String()
-                # self._logger.info(f"{msg}")
-                # self._logger.info(f"{str(msg)}")
                 ros_msg.data = str(msg)
                 self.teleop_pub.publish(ros_msg)
             except Exception as e:
