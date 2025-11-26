@@ -1,29 +1,25 @@
 #! /usr/bin/env python3
-import socket
-import sys
-import time
-
-import cv2
-import numpy as np
-from incar.webrtc.webrtc_connection import WebRTCConnection
-from incar.webrtc.custom_tracks import CV2VideoStreamTrack, ZerosStreamTrack, VideoStreamTrack
-
 import asyncio
 import json
+import socket
+import time
 
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import ReliabilityPolicy, HistoryPolicy, QoSProfile
 from std_msgs.msg import String, Float32MultiArray
-from sensor_msgs.msg import JointState
-from tf2_ros.buffer import Buffer
-from tf2_ros.transform_listener import TransformListener
-from tf2_ros import TransformException
-from datetime import datetime
+from sensor_msgs.msg import JointState as JointStateROS
+
+from incar.messages.robot_state_pb2 import *
+from incar.messages.primitives_pb2 import *
+from incar.messages.sensor_data_pb2 import SensorData
+from incar.webrtc.webrtc_connection import WebRTCConnection
+from incar.webrtc.custom_tracks import CV2VideoStreamTrack
 
 
 ROBOT_COMMAND_CHANNEL = "robot_command"
 ROBOT_STATE_CHANNEL = "robot_state"
+CORE_PUBLISHING_DT = 0.01 # TODO: Make configurable
 
 class WebRTCNode(Node):
     def __init__(self):
@@ -33,10 +29,10 @@ class WebRTCNode(Node):
         self.declare_parameter('stream_cameras', True)
         self.declare_parameter('cameras', "{}")
 
-        
-        self.left_state_msg = None
-        self.right_state_msg = None
-        self.position_command_msg = None
+        self.left_ee_state = None
+        self.right_ee_state = None
+        self.left_joint_states: JointStateROS = None
+        self.right_joint_states: JointStateROS = None
 
         teleop_qos = QoSProfile(
             reliability = ReliabilityPolicy.BEST_EFFORT,
@@ -51,87 +47,127 @@ class WebRTCNode(Node):
             depth = 10
         )
 
-        # TODO: Get transforms from TF for base coords of robot state
-        # TODO: Add EE frame in Robot state message?
-        # self.tf_buffer = Buffer()
-        # self.tf_listener = TransformListener(self.tf_buffer, self)
-        # try:
-        #     t = self.tf_buffer.lookup_transform('left', 'world', 0)
-        # except TransformException as ex:
-        #     self.get_logger().info(
-        #         f'Could not transform {'world'} to {'left'}: {ex}')
-
-        self.create_subscription(Float32MultiArray, '/left/ee_state', self.set_left_message, qos_profile=joint_state_qos)
-        self.create_subscription(JointState, '/left/joint_states', self.send_left_efforts, qos_profile=joint_state_qos)
-        self.create_subscription(JointState, '/right/joint_states', self.send_right_efforts, qos_profile=joint_state_qos)
-        # self.create_subscription(Float32MultiArray, '/left/position_command', self.set_position_command_message, qos_profile=joint_state_qos)
-        self.create_subscription(Float32MultiArray, '/right/ee_state', self.set_right_message, qos_profile=joint_state_qos)
+        self.create_subscription(Float32MultiArray, '/left/ee_state', self.log_left_ee, qos_profile=joint_state_qos)
+        self.create_subscription(Float32MultiArray, '/right/ee_state', self.log_right_ee, qos_profile=joint_state_qos)
+        self.create_subscription(JointStateROS, '/left/joint_states', self.log_left_joint_states, qos_profile=joint_state_qos)
+        self.create_subscription(JointStateROS, '/right/joint_states', self.log_right_joint_states, qos_profile=joint_state_qos)
 
         self.rtc_initialised = False
 
-    def handle_msg(self, channel, msg):
-        # self._logger.info(f"received message on channel: {channel}")
+    def handle_msg(self, channel, msg: str):
         if channel == ROBOT_COMMAND_CHANNEL:
             try:
                 ros_msg = String()
-                ros_msg.data = msg
+                ros_msg.data = str(msg)
                 self.teleop_pub.publish(ros_msg)
             except Exception as e:
                 print(e)
 
-    # TODO: Any throttling?
-    def send_left_efforts(self, joint_state_msg: JointState):
-        if not self.rtc_initialised or self.rtc.get_peer().connectionState != "connected":
-            return
-        
-        if self.rtc.data_channels["left.efforts"].bufferedAmount != 0:
-            self._logger.info("[WARNING] NOT SENDING JOINT EFFORTS DUE TO FULL BUFFER")
-        
-        rtc_message = {}
-        rtc_message["data"] = list(joint_state_msg.effort)[:7]
-        self.rtc.send_channel("left.efforts", rtc_message)
-
-    def send_right_efforts(self, joint_state_msg: JointState):
-        if self.rtc.get_peer().connectionState != "connected":
-            return
-        
-        if self.rtc.data_channels["right.efforts"].bufferedAmount != 0:
-            self._logger.info("[WARNING] NOT SENDING JOINT EFFORTS DUE TO FULL BUFFER")
-        
-        rtc_message = {}
-        rtc_message["data"] = list(joint_state_msg.effort)[:7]
-        self.rtc.send_channel("right.efforts", rtc_message)
-    
-    async def send_robot_state(self):
-        while self.rtc.get_peer().connectionState != "connected":
-            await asyncio.sleep(0.2)
-        
-        await asyncio.sleep(0.2)
-        self.rtc_initialised = True
-
+    async def publish_core_data_loop(self):
         while True:
-            start = time.time()
+            self.rtc_initialised = False
+            while self.rtc.get_peer().connectionState != "connected":
+                await asyncio.sleep(0.2)
+            
+            await asyncio.sleep(1)
+            self.rtc_initialised = True
 
-            if self.rtc.data_channels[ROBOT_STATE_CHANNEL].bufferedAmount != 0:
-                self._logger.info("[WARNING] NOT SENDING ROBOT STATE DUE TO FULL BUFFER")
-                await asyncio.sleep(0.02 - (end - start))
-                continue
+            while self.rtc.get_peer().connectionState == "connected":
+                start = time.time()
 
-            # if self.rtc.data_channels["position_command_plus_gripper"].bufferedAmount != 0:
-            #     self._logger.info("[WARNING] NOT SENDING ROBOT STATE DUE TO FULL BUFFER")
-            #     await asyncio.sleep(0.02 - (end - start))
-            #     continue
+                if self.rtc.data_channels[ROBOT_STATE_CHANNEL].bufferedAmount != 0:
+                    self._logger.info("[WARNING] NOT SENDING ANY DATA TO CORE DUE TO FULL BUFFERS")
+                    await asyncio.sleep(0.02 - (end - start))
+                    continue
+                
+                serialized_msg = self.get_state_message().SerializeToString()
+                self.rtc.send_channel(ROBOT_STATE_CHANNEL, serialized_msg)
 
-            if self.left_state_msg is not None:
-                self.rtc.send_channel(ROBOT_STATE_CHANNEL, self.left_state_msg)
+                end = time.time()
+                await asyncio.sleep(CORE_PUBLISHING_DT - (end - start))
 
-            # if self.position_command_msg is not None:
-            #     self.rtc.send_channel("position_command_plus_gripper", self.position_command_msg)
+    def get_state_message(self) -> RobotState:
+        message = RobotState(robotType="dual viper")
 
-            if self.right_state_msg is not None:
-                self.rtc.send_channel(ROBOT_STATE_CHANNEL, self.right_state_msg)
-            end = time.time()
-            await asyncio.sleep(0.01 - (end - start))
+        # LEFT
+        left_module = RobotModuleState()
+        left_gripper_module = RobotModuleState()
+
+        if self.left_ee_state is not None:
+            left_ee=CartesianState(
+                velocity=Velocity(
+                    linear=Vector3(
+                        x=self.left_ee_state[0],
+                        y=self.left_ee_state[1],
+                        z=self.left_ee_state[2]
+                    ),
+                    angular=Vector3(
+                        x=self.left_ee_state[3],
+                        y=self.left_ee_state[4],
+                        z=self.left_ee_state[5],
+                    )
+                )
+            )
+            left_module.ee.CopyFrom(left_ee)
+
+        if self.left_joint_states is not None:
+            left_joint = JointState(
+                positions = list(self.left_joint_states.position)[:6],
+                velocities = list(self.left_joint_states.velocity)[:6],
+                efforts = list(self.left_joint_states.effort)[:6]
+            )
+            left_module.joints.CopyFrom(left_joint)
+
+            left_gripper_joints=JointState(
+                positions = [self.left_joint_states.position[6]],
+                velocities = [self.left_joint_states.velocity[6]],
+                efforts = [self.left_joint_states.effort[6]]
+            )
+            left_gripper_module.joints.CopyFrom(left_gripper_joints)
+
+        message.moduleStates["left.gripper"].CopyFrom(left_gripper_module)
+        message.moduleStates["left.arm"].CopyFrom(left_module)
+
+        # RIGHT
+        right_module = RobotModuleState()
+        right_gripper_module = RobotModuleState()
+
+        if self.right_ee_state is not None:
+            right_ee=CartesianState(
+                velocity=Velocity(
+                    linear=Vector3(
+                        x=self.right_ee_state[0],
+                        y=self.right_ee_state[1],
+                        z=self.right_ee_state[2]
+                    ),
+                    angular=Vector3(
+                        x=self.right_ee_state[3],
+                        y=self.right_ee_state[4],
+                        z=self.right_ee_state[5],
+                    )
+                )
+            )
+            right_module.ee.CopyFrom(right_ee)
+
+        if self.right_joint_states is not None:
+            right_joint = JointState(
+                positions = list(self.right_joint_states.position)[:6],
+                velocities = list(self.right_joint_states.velocity)[:6],
+                efforts = list(self.right_joint_states.effort)[:6]
+            )
+            right_module.joints.CopyFrom(right_joint)
+
+            right_gripper_joints=JointState(
+                positions = [self.right_joint_states.position[6]],
+                velocities = [self.right_joint_states.velocity[6]],
+                efforts = [self.right_joint_states.effort[6]]
+            )
+            right_gripper_module.joints.CopyFrom(right_gripper_joints)
+
+        message.moduleStates["right.gripper"].CopyFrom(right_gripper_module)
+        message.moduleStates["right.arm"].CopyFrom(right_module)
+
+        return message
 
     async def spin(self):
         while rclpy.ok():
@@ -150,13 +186,11 @@ class WebRTCNode(Node):
         self.rtc = (WebRTCConnection()
             .add_channel(ROBOT_COMMAND_CHANNEL, lambda msg: self.handle_msg(ROBOT_COMMAND_CHANNEL, msg))
             .add_channel(ROBOT_STATE_CHANNEL)
-            .add_channel("left.efforts")
-            .add_channel("right.efforts")
         )
 
         tasks = [
             self.spin(),
-            self.send_robot_state(),
+            self.publish_core_data_loop(),
             self.rtc.start_connection(ip, self.get_parameter('port').value, True),
         ]
 
@@ -177,64 +211,20 @@ class WebRTCNode(Node):
 
         done, _pending = asyncio.get_event_loop().run_until_complete(future)
         for task in done:
-            task.result()  # raises exceptions if any
+            task.result()
 
-    def set_position_command_message(self, msg):
-        message = dict()
-        message["data"] = msg.data.tolist()
-        self.position_command_msg = message
+    def log_left_ee(self, msg):
+        self.left_ee_state = msg.data.tolist()[:6]
 
-    def set_left_message(self, msg): 
-        state_message = dict()
-        
-        state_message["header"] = dict()
-        state_message["header"]["timestamp"] = datetime.now().isoformat()
-        state_message["header"]["messageType"] = "RobotStateMessage"
-        state_message["header"]["version"] = "0.0.1"
-        
-        state_message["robotID"] = "left"
+    def log_right_ee(self, msg):
+        self.right_ee_state = msg.data.tolist()[:6]
 
-        state_message["baseFrame"] = dict()
-        state_message["baseFrame"]["position"] = dict()
-        state_message["baseFrame"]["position"]["x"] = 0
-        state_message["baseFrame"]["position"]["y"] = 0
-        state_message["baseFrame"]["position"]["z"] = 1
-        state_message["baseFrame"]["rotation"] = dict()
-        state_message["baseFrame"]["rotation"]["x"] = 0
-        state_message["baseFrame"]["rotation"]["y"] = 0
-        state_message["baseFrame"]["rotation"]["z"] = 0
-        state_message["baseFrame"]["rotation"]["w"] = 1
+    def log_left_joint_states(self, joint_state_msg: JointStateROS):
+        self.left_joint_states = joint_state_msg
 
-        state_message["jointStates"] = msg.data.tolist()
-        state_message["robotType"] = "dual_viper"
-
-        self.left_state_msg = state_message
-
-    def set_right_message(self, msg):
-        state_message = dict()
-        
-        state_message["header"] = dict()
-        state_message["header"]["timestamp"] = datetime.now().isoformat()
-        state_message["header"]["messageType"] = "RobotStateMessage"
-        state_message["header"]["version"] = "0.0.1"
-        
-        state_message["robotID"] = "right"
-
-        state_message["baseFrame"] = dict()
-        state_message["baseFrame"]["position"] = dict()
-        state_message["baseFrame"]["position"]["x"] = 0
-        state_message["baseFrame"]["position"]["y"] = 0.39
-        state_message["baseFrame"]["position"]["z"] = 1
-        state_message["baseFrame"]["rotation"] = dict()
-        state_message["baseFrame"]["rotation"]["x"] = 0
-        state_message["baseFrame"]["rotation"]["y"] = 0
-        state_message["baseFrame"]["rotation"]["z"] = 1
-        state_message["baseFrame"]["rotation"]["w"] = 0
-
-        state_message["jointStates"] = msg.data.tolist()
-        state_message["robotType"] = "dual_viper"
-
-        self.right_state_msg = state_message
+    def log_right_joint_states(self, joint_state_msg: JointStateROS):
+        self.right_joint_states = joint_state_msg
+    
 
 
 if __name__ == "__main__":

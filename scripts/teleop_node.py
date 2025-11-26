@@ -1,5 +1,5 @@
 #! /usr/bin/env python3
-import math
+import ast
 import time
 import traceback
 import rclpy
@@ -16,7 +16,8 @@ from std_msgs.msg import String, Float32MultiArray
 
 import numpy as np
 from tf_transformations import euler_matrix
-from incar.messages import RobotCommandMessage
+from incar.messages.robot_command_pb2 import *
+from incar.messages.robot_state_pb2 import *
 from routines import parse_routines
 
 
@@ -67,7 +68,6 @@ class TeleopNode(Node):
         robot_startup()
 
         self.ee_state_publisher = self.create_publisher(Float32MultiArray, 'ee_state', 1)
-        self.position_command_publisher = self.create_publisher(Float32MultiArray, 'position_command', 1)
 
         # Initialise topics
         self.bot.arm.set_joint_positions(self.get_parameter('home_position').value, moving_time=5, blocking=True)
@@ -93,36 +93,40 @@ class TeleopNode(Node):
         self.create_timer(self.dt, self.publishing_loop, MutuallyExclusiveCallbackGroup())
 
         _, command_msg = wait_for_message(String, self, '/robot_commands', qos_profile=teleop_qos)
-        self.current_command = json.loads(command_msg.data)
-        if type(self.current_command) is str:
-            self.current_command = json.loads(self.current_command)
-
+        self.command_callback(command_msg)
 
         self.create_subscription(String, '/robot_commands', self.command_callback, teleop_qos)
 
         self._logger.info("Command received, starting control loop!")
         self.create_timer(self.dt, self.control_loop, MutuallyExclusiveCallbackGroup())
         
-    def command_callback(self, msg):
+    def command_callback(self, msg: String):
         try:
-            command_msg = RobotCommandMessage.from_json(msg.data)
-            # self._logger.info(f"{command_msg}")
-            
-            if not f"teleop_action_{self.teleop_controller}" in command_msg.commands.keys():
+            message_obj = RobotCommand()
+            message_obj.ParseFromString(ast.literal_eval(msg.data))
+
+            arm_command = message_obj.commands.get(f"{self.teleop_controller}.commands.arm")
+            gripper_command = message_obj.commands.get(f"{self.teleop_controller}.commands.gripper")
+
+            if arm_command is None:
                 self.command = [0, 0, 0, 0, 0, 0]
             else:
                 self.command = [
-                    command_msg.commands[f"teleop_action_{self.teleop_controller}"][0]*self.dt,
-                    command_msg.commands[f"teleop_action_{self.teleop_controller}"][1]*self.dt,
-                    command_msg.commands[f"teleop_action_{self.teleop_controller}"][2]*self.dt,
-                    -command_msg.commands[f"teleop_action_{self.teleop_controller}"][3]*self.dt,
-                    -command_msg.commands[f"teleop_action_{self.teleop_controller}"][4]*self.dt,
-                    -command_msg.commands[f"teleop_action_{self.teleop_controller}"][5]*self.dt,
+                    arm_command.values[0]*self.dt,
+                    arm_command.values[1]*self.dt,
+                    arm_command.values[2]*self.dt,
+                    -arm_command.values[3]*self.dt,
+                    -arm_command.values[4]*self.dt,
+                    -arm_command.values[5]*self.dt
                 ]
-                self.gripper_command = command_msg.commands[f"teleop_action_{self.teleop_controller}"][6]
 
-            if command_msg.routines[self.teleop_controller] != -1:
-                self.buffered_routine = self.routine_list[command_msg.routines[self.teleop_controller]]
+            if gripper_command is not None:
+                self.gripper_command = gripper_command.values[0]
+
+            routine = message_obj.routines.get(self.teleop_controller)
+            
+            if routine is not None:
+                self.buffered_routine = self.routine_list[routine]
 
             self.last_command_received = time.time()
         except Exception:
@@ -204,19 +208,6 @@ class TeleopNode(Node):
         state_msg.data = msg
         self.ee_state_publisher.publish(state_msg)
 
-        position_command_msg = Float32MultiArray()
-        pose = get_pose_from_transform(self.current_pose)
-        msg = [
-            pose[0],
-            pose[1],
-            pose[2],
-            pose[3],
-            pose[4],
-            pose[5],
-            float(self.gripper_command)
-        ]
-        position_command_msg.data = msg
-        self.position_command_publisher.publish(position_command_msg)
 
 def get_pose_from_transform(transform):
     """
