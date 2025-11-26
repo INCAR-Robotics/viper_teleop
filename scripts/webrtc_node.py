@@ -75,9 +75,7 @@ class WebRTCNode(Node):
             while self.rtc.get_peer().connectionState == "connected":
                 start = time.time()
 
-                if self.rtc.data_channels[ROBOT_STATE_CHANNEL].bufferedAmount != 0 or \
-                self.rtc.data_channels["left.efforts"].bufferedAmount != 0 or \
-                self.rtc.data_channels["right.efforts"].bufferedAmount != 0:
+                if self.rtc.data_channels[ROBOT_STATE_CHANNEL].bufferedAmount != 0:
                     self._logger.info("[WARNING] NOT SENDING ANY DATA TO CORE DUE TO FULL BUFFERS")
                     await asyncio.sleep(0.02 - (end - start))
                     continue
@@ -85,23 +83,8 @@ class WebRTCNode(Node):
                 serialized_msg = self.get_state_message().SerializeToString()
                 self.rtc.send_channel(ROBOT_STATE_CHANNEL, serialized_msg)
 
-                self.send_efforts()
-
                 end = time.time()
                 await asyncio.sleep(CORE_PUBLISHING_DT - (end - start))
-
-    def send_efforts(self):
-        # LEFT
-        if self.left_joint_states is not None:
-            left_efforts = self.left_joint_states.effort[:7]
-            serialized_msg = SensorData(data = list(left_efforts)).SerializeToString()
-            self.rtc.send_channel("left.efforts", serialized_msg)
-
-        # RIGHT
-        if self.right_joint_states is not None:
-            right_efforts = self.right_joint_states.effort[:7]
-            serialized_msg = SensorData(data = list(right_efforts)).SerializeToString()
-            self.rtc.send_channel("right.efforts", serialized_msg)
 
     def get_state_message(self) -> RobotState:
         message = RobotState(robotType="dual viper")
@@ -130,13 +113,15 @@ class WebRTCNode(Node):
         if self.left_joint_states is not None:
             left_joint = JointState(
                 positions = list(self.left_joint_states.position)[:6],
-                velocities = list(self.left_joint_states.velocity)[:6]
+                velocities = list(self.left_joint_states.velocity)[:6],
+                efforts = list(self.left_joint_states.effort)[:6]
             )
             left_module.joints.CopyFrom(left_joint)
 
             left_gripper_joints=JointState(
                 positions = [self.left_joint_states.position[6]],
-                velocities = [self.left_joint_states.velocity[6]]
+                velocities = [self.left_joint_states.velocity[6]],
+                efforts = [self.left_joint_states.effort[6]]
             )
             left_gripper_module.joints.CopyFrom(left_gripper_joints)
 
@@ -167,13 +152,15 @@ class WebRTCNode(Node):
         if self.right_joint_states is not None:
             right_joint = JointState(
                 positions = list(self.right_joint_states.position)[:6],
-                velocities = list(self.right_joint_states.velocity)[:6]
+                velocities = list(self.right_joint_states.velocity)[:6],
+                efforts = list(self.right_joint_states.effort)[:6]
             )
             right_module.joints.CopyFrom(right_joint)
 
             right_gripper_joints=JointState(
                 positions = [self.right_joint_states.position[6]],
-                velocities = [self.right_joint_states.velocity[6]]
+                velocities = [self.right_joint_states.velocity[6]],
+                efforts = [self.right_joint_states.effort[6]]
             )
             right_gripper_module.joints.CopyFrom(right_gripper_joints)
 
@@ -199,8 +186,6 @@ class WebRTCNode(Node):
         self.rtc = (WebRTCConnection()
             .add_channel(ROBOT_COMMAND_CHANNEL, lambda msg: self.handle_msg(ROBOT_COMMAND_CHANNEL, msg))
             .add_channel(ROBOT_STATE_CHANNEL)
-            .add_channel("left.efforts")
-            .add_channel("right.efforts")
         )
 
         tasks = [
