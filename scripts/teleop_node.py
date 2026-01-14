@@ -105,8 +105,8 @@ class TeleopNode(Node):
             message_obj = RobotCommand()
             message_obj.ParseFromString(ast.literal_eval(msg.data))
 
-            arm_command = message_obj.commands.get(f"{self.teleop_controller}.commands.arm")
-            gripper_command = message_obj.commands.get(f"{self.teleop_controller}.commands.gripper")
+            arm_command = message_obj.commands.get(f"{self.teleop_controller}.commands.arm.ee.velocity")
+            gripper_command = message_obj.commands.get(f"{self.teleop_controller}.commands.gripper.openclose")
 
             if arm_command is None:
                 self.command = [0, 0, 0, 0, 0, 0]

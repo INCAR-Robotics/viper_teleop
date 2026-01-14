@@ -4,6 +4,8 @@ import json
 import socket
 import time
 
+import numpy as np
+
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import ReliabilityPolicy, HistoryPolicy, QoSProfile
@@ -20,6 +22,26 @@ from incar.webrtc.custom_tracks import CV2VideoStreamTrack
 ROBOT_COMMAND_CHANNEL = "robot_command"
 ROBOT_STATE_CHANNEL = "robot_state"
 CORE_PUBLISHING_DT = 0.01 # TODO: Make configurable
+
+def get_quaternion_from_euler(roll, pitch, yaw):
+    """
+    Convert an Euler angle to a quaternion.
+    
+    Input
+        :param roll: The roll (rotation around x-axis) angle in radians.
+        :param pitch: The pitch (rotation around y-axis) angle in radians.
+        :param yaw: The yaw (rotation around z-axis) angle in radians.
+    
+    Output
+        :return qx, qy, qz, qw: The orientation in quaternion [x,y,z,w] format
+    """
+    qx = np.sin(roll/2) * np.cos(pitch/2) * np.cos(yaw/2) - np.cos(roll/2) * np.sin(pitch/2) * np.sin(yaw/2)
+    qy = np.cos(roll/2) * np.sin(pitch/2) * np.cos(yaw/2) + np.sin(roll/2) * np.cos(pitch/2) * np.sin(yaw/2)
+    qz = np.cos(roll/2) * np.cos(pitch/2) * np.sin(yaw/2) - np.sin(roll/2) * np.sin(pitch/2) * np.cos(yaw/2)
+    qw = np.cos(roll/2) * np.cos(pitch/2) * np.cos(yaw/2) + np.sin(roll/2) * np.sin(pitch/2) * np.sin(yaw/2)
+
+    return [qx, qy, qz, qw]
+
 
 class WebRTCNode(Node):
     def __init__(self):
@@ -94,17 +116,19 @@ class WebRTCNode(Node):
         left_gripper_module = RobotModuleState()
 
         if self.left_ee_state is not None:
+            quat = get_quaternion_from_euler(self.left_ee_state[3], self.left_ee_state[4], self.left_ee_state[5])
             left_ee=CartesianState(
-                velocity=Velocity(
-                    linear=Vector3(
+                pose=Pose(
+                    position=Vector3(
                         x=self.left_ee_state[0],
                         y=self.left_ee_state[1],
                         z=self.left_ee_state[2]
                     ),
-                    angular=Vector3(
-                        x=self.left_ee_state[3],
-                        y=self.left_ee_state[4],
-                        z=self.left_ee_state[5],
+                    rotation=Quaternion(
+                        x=quat[0],
+                        y=quat[1],
+                        z=quat[2],
+                        w=quat[3],
                     )
                 )
             )
@@ -133,17 +157,19 @@ class WebRTCNode(Node):
         right_gripper_module = RobotModuleState()
 
         if self.right_ee_state is not None:
+            quat = get_quaternion_from_euler(self.right_ee_state[3], self.right_ee_state[4], self.right_ee_state[5])
             right_ee=CartesianState(
-                velocity=Velocity(
-                    linear=Vector3(
+                pose=Pose(
+                    position=Vector3(
                         x=self.right_ee_state[0],
                         y=self.right_ee_state[1],
                         z=self.right_ee_state[2]
                     ),
-                    angular=Vector3(
-                        x=self.right_ee_state[3],
-                        y=self.right_ee_state[4],
-                        z=self.right_ee_state[5],
+                    rotation=Quaternion(
+                        x=quat[0],
+                        y=quat[1],
+                        z=quat[2],
+                        w=quat[3],
                     )
                 )
             )
