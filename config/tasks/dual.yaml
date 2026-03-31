@@ -3,7 +3,7 @@ left:
     ros__parameters:
       enabled: true
       dt: 0.01
-      home_position: &home_left [0.7777, -0.4234, 0.5737, -0.7731, 1.5693, 1.7579]
+      home_position: &home_left [-0.0107, -0.2286, 0.2291, 0.0077, 1.3668, -0.0674]
       start_with_gripper_open: true
       gripper_enabled: true
 

@@ -12,12 +12,10 @@ import json
 
 from interbotix_xs_modules.xs_robot.arm import InterbotixManipulatorXS
 from interbotix_common_modules.common_robot.robot import robot_startup
-from std_msgs.msg import String, Float32MultiArray
+from std_msgs.msg import String, Float32MultiArray, Int16
 
 import numpy as np
 from tf_transformations import euler_matrix
-from incar.messages.robot_command_pb2 import *
-from incar.messages.robot_state_pb2 import *
 from routines import parse_routines
 
 
@@ -72,6 +70,7 @@ class TeleopNode(Node):
         # Initialise topics
         self.bot.arm.set_joint_positions(self.get_parameter('home_position').value, moving_time=5, blocking=True)
         self.current_pose = self.bot.arm.get_ee_pose()
+        self.cached_joints = self.bot.arm.get_joint_positions()
         if self.get_parameter('start_with_gripper_open').value:
             self.bot.gripper.release()
             self.gripper_is_open = True
@@ -92,45 +91,49 @@ class TeleopNode(Node):
         self.publishing_loop()
         self.create_timer(self.dt, self.publishing_loop, MutuallyExclusiveCallbackGroup())
 
-        _, command_msg = wait_for_message(String, self, '/robot_commands', qos_profile=teleop_qos)
-        self.command_callback(command_msg)
+        _, command_msg = wait_for_message(Float32MultiArray, self, 'arm_commands', qos_profile=teleop_qos)
+        self.arm_command_callback(command_msg)
 
-        self.create_subscription(String, '/robot_commands', self.command_callback, teleop_qos)
+        self.create_subscription(Float32MultiArray, 'arm_commands', self.arm_command_callback, teleop_qos)
+        self.create_subscription(Float32MultiArray, 'gripper_commands', self.gripper_command_callback, teleop_qos)
+        self.create_subscription(Float32MultiArray, 'routines', self.routine_callback, teleop_qos)
 
         self._logger.info("Command received, starting control loop!")
         self.create_timer(self.dt, self.control_loop, MutuallyExclusiveCallbackGroup())
-        
-    def command_callback(self, msg: String):
+    
+    def arm_command_callback(self, msg: Float32MultiArray):
+        self.command = [
+            msg.data[0]*self.dt,
+            msg.data[1]*self.dt,
+            msg.data[2]*self.dt,
+            -msg.data[3]*self.dt,
+            -msg.data[4]*self.dt,
+            -msg.data[5]*self.dt
+        ]
+        self.last_command_received = time.time()
+
+    def gripper_command_callback(self, msg: Float32MultiArray):
+        self.gripper_command = msg.data[0]
+
+    def routine_callback(self, msg: Float32MultiArray):
         try:
-            message_obj = RobotCommand()
-            message_obj.ParseFromString(ast.literal_eval(msg.data))
+            if self.is_running_routine: return
 
-            arm_command = message_obj.commands.get(f"{self.teleop_controller}.commands.arm")
-            gripper_command = message_obj.commands.get(f"{self.teleop_controller}.commands.gripper")
+            routine_index = self.get_routine_index_from_array(msg.data)
+            if routine_index is None: return
 
-            if arm_command is None:
-                self.command = [0, 0, 0, 0, 0, 0]
+            if routine_index < len(self.routine_list):
+                self.buffered_routine = self.routine_list[routine_index]
+                self._logger.info(f"Buffered routine {self.buffered_routine}")
             else:
-                self.command = [
-                    arm_command.values[0]*self.dt,
-                    arm_command.values[1]*self.dt,
-                    arm_command.values[2]*self.dt,
-                    -arm_command.values[3]*self.dt,
-                    -arm_command.values[4]*self.dt,
-                    -arm_command.values[5]*self.dt
-                ]
-
-            if gripper_command is not None:
-                self.gripper_command = gripper_command.values[0]
-
-            routine = message_obj.routines.get(self.teleop_controller)
-            
-            if routine is not None:
-                self.buffered_routine = self.routine_list[routine]
-
-            self.last_command_received = time.time()
+                self._logger.error(f"Received routine index {routine_index} but only have {len(self.routine_list)} routines loaded")
         except Exception:
             self._logger.info(traceback.print_exc())
+
+    def get_routine_index_from_array(self, array) -> int | None:
+        for i, value in enumerate(array):
+            if value > 0.5: return i
+        return None
 
     def control_loop(self):
         try:
@@ -156,6 +159,17 @@ class TeleopNode(Node):
                 self._logger.info("Ran buffered routine")
                 self.is_running_routine = False
                 return
+        
+            if self.gripper_enabled and self.gripper_command > 0.75 and self.gripper_is_open:
+                self._logger.info("GRASPING")
+                self.bot.gripper.grasp(0)
+                self.gripper_is_open = False
+            elif self.gripper_enabled and self.gripper_command < 0.25 and not self.gripper_is_open:
+                self._logger.info("RELEASING")
+                self.bot.gripper.release(0)
+                self.gripper_is_open = True
+            
+            if max(max(self.command), -min(self.command)) == 0: return # Let joint_control_loop take over
             
             if not self.is_engaged or time.time() - self.last_command_received > COMMAND_TIMEOUT:
                 return
@@ -166,15 +180,6 @@ class TeleopNode(Node):
             if max(self.command[3:6]) > 2*self.dt or min(self.command[3:6]) < -2*self.dt:
                 self._logger.info("EXCEEDED ANGULAR LIMITS")
                 return
-        
-            if self.gripper_enabled and self.gripper_command > 0.75 and self.gripper_is_open:
-                self._logger.info("GRASPING")
-                self.bot.gripper.grasp(0)
-                self.gripper_is_open = False
-            elif self.gripper_enabled and self.gripper_command < 0.25 and not self.gripper_is_open:
-                self._logger.info("RELEASING")
-                self.bot.gripper.release(0)
-                self.gripper_is_open = True
 
             T_base_target = np.identity(4)
             T_base_target[:3, :3] = euler_matrix(self.command[3], self.command[4], self.command[5])[:3, :3] @ self.current_pose[:3, :3]
@@ -189,6 +194,7 @@ class TeleopNode(Node):
 
             if succes:
                 self.current_pose = T_base_target
+                self.cached_joints = self.bot.arm.get_joint_positions()
         except Exception:
             self._logger.info(traceback.print_exc())
 
