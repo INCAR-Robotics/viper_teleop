@@ -72,6 +72,7 @@ class TeleopNode(Node):
         # Initialise topics
         self.bot.arm.set_joint_positions(self.get_parameter('home_position').value, moving_time=5, blocking=True)
         self.current_pose = self.bot.arm.get_ee_pose()
+        self.cached_joints = self.bot.arm.get_joint_positions()
         if self.get_parameter('start_with_gripper_open').value:
             self.bot.gripper.release()
             self.gripper_is_open = True
@@ -99,6 +100,7 @@ class TeleopNode(Node):
 
         self._logger.info("Command received, starting control loop!")
         self.create_timer(self.dt, self.control_loop, MutuallyExclusiveCallbackGroup())
+        self.create_timer(self.dt, self.joint_control_loop, MutuallyExclusiveCallbackGroup())
         
     def command_callback(self, msg: String):
         try:
@@ -107,6 +109,21 @@ class TeleopNode(Node):
 
             arm_command = message_obj.commands.get(f"{self.teleop_controller}.commands.arm.ee.velocity")
             gripper_command = message_obj.commands.get(f"{self.teleop_controller}.commands.gripper.openclose")
+            joint_command = message_obj.commands.get("action")
+            if joint_command is None:
+                # self._logger.info("No joint command present")
+                self.joint_command = None
+            else:
+                # self._logger.info("Joint command present")
+                self.joint_command = [
+                    joint_command.values[0],
+                    joint_command.values[1],
+                    joint_command.values[2],
+                    joint_command.values[3],
+                    joint_command.values[4],
+                    joint_command.values[5],
+                    joint_command.values[6],
+                ]
 
             if arm_command is None:
                 self.command = [0, 0, 0, 0, 0, 0]
@@ -122,6 +139,7 @@ class TeleopNode(Node):
 
             if gripper_command is not None:
                 self.gripper_command = gripper_command.values[0]
+                # self._logger.info(f"Received gripper command {self.gripper_command}")
 
             routine = message_obj.routines.get(self.teleop_controller)
             
@@ -129,6 +147,53 @@ class TeleopNode(Node):
                 self.buffered_routine = self.routine_list[routine]
 
             self.last_command_received = time.time()
+        except Exception:
+            self._logger.info(traceback.print_exc())
+
+    def joint_control_loop(self):
+        try:
+            if self.joint_command == None:
+                # self._logger.info("No Joint commands were present") 
+                return
+            if self.is_running_routine:
+                # self._logger.info("Running routine, skipping joint command")
+                return
+            if not self.is_engaged or time.time() - self.last_command_received > COMMAND_TIMEOUT:
+                # self._logger.info("Not engaged or time-out, skipping joint command") 
+                return
+            if max(max(self.command), -min(self.command)) > 0:
+                # self._logger.info("EE loop has priority, skipping joint command") 
+                return
+            
+            current_joints = self.bot.arm.get_joint_positions()
+            dq = [
+                self.joint_command[0] - current_joints[0], 
+                self.joint_command[1] - current_joints[1], 
+                self.joint_command[2] - current_joints[2], 
+                self.joint_command[3] - current_joints[3], 
+                self.joint_command[4] - current_joints[4], 
+                self.joint_command[5] - current_joints[5] 
+            ]
+
+            new_joints = [
+                current_joints[0] + min(max(dq[0], 0.02), -0.02),
+                current_joints[1] + min(max(dq[1], 0.02), -0.02),
+                current_joints[2] + min(max(dq[2], 0.02), -0.02),
+                current_joints[3] + min(max(dq[3], 0.02), -0.02),
+                current_joints[4] + min(max(dq[4], 0.02), -0.02),
+                current_joints[5] + min(max(dq[5], 0.02), -0.02)
+            ]
+
+            self._logger.info("Executing joint commands") 
+            succes = self.bot.arm.set_joint_positions(
+                new_joints,
+                moving_time=self.dt*1.1,
+                blocking=False
+            )
+
+            if succes:
+                self.current_pose = self.bot.arm.get_ee_pose()
+                self.cached_joints = self.bot.arm.get_joint_positions()
         except Exception:
             self._logger.info(traceback.print_exc())
 
@@ -156,6 +221,17 @@ class TeleopNode(Node):
                 self._logger.info("Ran buffered routine")
                 self.is_running_routine = False
                 return
+        
+            if self.gripper_enabled and self.gripper_command > 0.75 and self.gripper_is_open:
+                self._logger.info("GRASPING")
+                self.bot.gripper.grasp(0)
+                self.gripper_is_open = False
+            elif self.gripper_enabled and self.gripper_command < 0.25 and not self.gripper_is_open:
+                self._logger.info("RELEASING")
+                self.bot.gripper.release(0)
+                self.gripper_is_open = True
+            
+            if max(max(self.command), -min(self.command)) == 0: return # Let joint_control_loop take over
             
             if not self.is_engaged or time.time() - self.last_command_received > COMMAND_TIMEOUT:
                 return
@@ -166,15 +242,6 @@ class TeleopNode(Node):
             if max(self.command[3:6]) > 2*self.dt or min(self.command[3:6]) < -2*self.dt:
                 self._logger.info("EXCEEDED ANGULAR LIMITS")
                 return
-        
-            if self.gripper_enabled and self.gripper_command > 0.75 and self.gripper_is_open:
-                self._logger.info("GRASPING")
-                self.bot.gripper.grasp(0)
-                self.gripper_is_open = False
-            elif self.gripper_enabled and self.gripper_command < 0.25 and not self.gripper_is_open:
-                self._logger.info("RELEASING")
-                self.bot.gripper.release(0)
-                self.gripper_is_open = True
 
             T_base_target = np.identity(4)
             T_base_target[:3, :3] = euler_matrix(self.command[3], self.command[4], self.command[5])[:3, :3] @ self.current_pose[:3, :3]
@@ -189,6 +256,7 @@ class TeleopNode(Node):
 
             if succes:
                 self.current_pose = T_base_target
+                self.cached_joints = self.bot.arm.get_joint_positions()
         except Exception:
             self._logger.info(traceback.print_exc())
 
