@@ -12,7 +12,7 @@ import json
 
 from interbotix_xs_modules.xs_robot.arm import InterbotixManipulatorXS
 from interbotix_common_modules.common_robot.robot import robot_startup
-from std_msgs.msg import String, Float32MultiArray
+from std_msgs.msg import String, Float32MultiArray, Int16
 
 import numpy as np
 from tf_transformations import euler_matrix
@@ -96,6 +96,7 @@ class TeleopNode(Node):
 
         self.create_subscription(Float32MultiArray, 'arm_commands', self.arm_command_callback, teleop_qos)
         self.create_subscription(Float32MultiArray, 'gripper_commands', self.gripper_command_callback, teleop_qos)
+        self.create_subscription(Float32MultiArray, 'routines', self.routine_callback, teleop_qos)
 
         self._logger.info("Command received, starting control loop!")
         self.create_timer(self.dt, self.control_loop, MutuallyExclusiveCallbackGroup())
@@ -113,6 +114,26 @@ class TeleopNode(Node):
 
     def gripper_command_callback(self, msg: Float32MultiArray):
         self.gripper_command = msg.data[0]
+
+    def routine_callback(self, msg: Float32MultiArray):
+        try:
+            if self.is_running_routine: return
+
+            routine_index = self.get_routine_index_from_array(msg.data)
+            if routine_index is None: return
+
+            if routine_index < len(self.routine_list):
+                self.buffered_routine = self.routine_list[routine_index]
+                self._logger.info(f"Buffered routine {self.buffered_routine}")
+            else:
+                self._logger.error(f"Received routine index {routine_index} but only have {len(self.routine_list)} routines loaded")
+        except Exception:
+            self._logger.info(traceback.print_exc())
+
+    def get_routine_index_from_array(self, array) -> int | None:
+        for i, value in enumerate(array):
+            if value > 0.5: return i
+        return None
 
     def control_loop(self):
         try:

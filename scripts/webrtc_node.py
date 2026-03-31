@@ -26,8 +26,10 @@ class WebRTCNode(Node):
         )
         self.left_arm_commands = self.create_publisher(Float32MultiArray, '/left/arm_commands', qos_profile=teleop_qos)
         self.left_gripper_commands = self.create_publisher(Float32MultiArray, '/left/gripper_commands', qos_profile=teleop_qos)
+        self.left_routines = self.create_publisher(Float32MultiArray, '/left/routines', qos_profile=teleop_qos)
         self.right_arm_commands = self.create_publisher(Float32MultiArray, '/right/arm_commands', qos_profile=teleop_qos)
         self.right_gripper_commands = self.create_publisher(Float32MultiArray, '/right/gripper_commands', qos_profile=teleop_qos)
+        self.right_routines = self.create_publisher(Float32MultiArray, '/right/routines', qos_profile=teleop_qos)
 
         joint_state_qos = QoSProfile(
             reliability = ReliabilityPolicy.BEST_EFFORT,
@@ -94,6 +96,8 @@ if __name__ == "__main__":
         command_hooks = {
             "right.commands.arm.ee.velocity": lambda x: webrtc_node.right_arm_commands.publish(Float32MultiArray(data=x)),
             "left.commands.arm.ee.velocity": lambda x: webrtc_node.left_arm_commands.publish(Float32MultiArray(data=x)),
+            "right.routines": lambda x: webrtc_node.right_routines.publish(Float32MultiArray(data=x)),
+            "left.routines": lambda x: webrtc_node.left_routines.publish(Float32MultiArray(data=x)),
             "right.commands.gripper.openclose": lambda x: webrtc_node.right_gripper_commands.publish(Float32MultiArray(data=x)),
             "left.commands.gripper.openclose": lambda x: webrtc_node.left_gripper_commands.publish(Float32MultiArray(data=x))
         },
