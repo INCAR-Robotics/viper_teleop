@@ -16,8 +16,6 @@ from std_msgs.msg import String, Float32MultiArray
 
 import numpy as np
 from tf_transformations import euler_matrix
-from incar.messages.robot_command_pb2 import *
-from incar.messages.robot_state_pb2 import *
 from routines import parse_routines
 
 
@@ -93,109 +91,28 @@ class TeleopNode(Node):
         self.publishing_loop()
         self.create_timer(self.dt, self.publishing_loop, MutuallyExclusiveCallbackGroup())
 
-        _, command_msg = wait_for_message(String, self, '/robot_commands', qos_profile=teleop_qos)
-        self.command_callback(command_msg)
+        _, command_msg = wait_for_message(Float32MultiArray, self, 'arm_commands', qos_profile=teleop_qos)
+        self.arm_command_callback(command_msg)
 
-        self.create_subscription(String, '/robot_commands', self.command_callback, teleop_qos)
+        self.create_subscription(Float32MultiArray, 'arm_commands', self.arm_command_callback, teleop_qos)
+        self.create_subscription(Float32MultiArray, 'gripper_commands', self.gripper_command_callback, teleop_qos)
 
         self._logger.info("Command received, starting control loop!")
         self.create_timer(self.dt, self.control_loop, MutuallyExclusiveCallbackGroup())
-        self.create_timer(self.dt, self.joint_control_loop, MutuallyExclusiveCallbackGroup())
-        
-    def command_callback(self, msg: String):
-        try:
-            message_obj = RobotCommand()
-            message_obj.ParseFromString(ast.literal_eval(msg.data))
+    
+    def arm_command_callback(self, msg: Float32MultiArray):
+        self.command = [
+            msg.data[0]*self.dt,
+            msg.data[1]*self.dt,
+            msg.data[2]*self.dt,
+            -msg.data[3]*self.dt,
+            -msg.data[4]*self.dt,
+            -msg.data[5]*self.dt
+        ]
+        self.last_command_received = time.time()
 
-            arm_command = message_obj.commands.get(f"{self.teleop_controller}.commands.arm.ee.velocity")
-            gripper_command = message_obj.commands.get(f"{self.teleop_controller}.commands.gripper.openclose")
-            joint_command = message_obj.commands.get("action")
-            if joint_command is None:
-                # self._logger.info("No joint command present")
-                self.joint_command = None
-            else:
-                # self._logger.info("Joint command present")
-                self.joint_command = [
-                    joint_command.values[0],
-                    joint_command.values[1],
-                    joint_command.values[2],
-                    joint_command.values[3],
-                    joint_command.values[4],
-                    joint_command.values[5],
-                    joint_command.values[6],
-                ]
-
-            if arm_command is None:
-                self.command = [0, 0, 0, 0, 0, 0]
-            else:
-                self.command = [
-                    arm_command.values[0]*self.dt,
-                    arm_command.values[1]*self.dt,
-                    arm_command.values[2]*self.dt,
-                    -arm_command.values[3]*self.dt,
-                    -arm_command.values[4]*self.dt,
-                    -arm_command.values[5]*self.dt
-                ]
-
-            if gripper_command is not None:
-                self.gripper_command = gripper_command.values[0]
-                # self._logger.info(f"Received gripper command {self.gripper_command}")
-
-            routine = message_obj.routines.get(self.teleop_controller)
-            
-            if routine is not None:
-                self.buffered_routine = self.routine_list[routine]
-
-            self.last_command_received = time.time()
-        except Exception:
-            self._logger.info(traceback.print_exc())
-
-    def joint_control_loop(self):
-        try:
-            if self.joint_command == None:
-                # self._logger.info("No Joint commands were present") 
-                return
-            if self.is_running_routine:
-                # self._logger.info("Running routine, skipping joint command")
-                return
-            if not self.is_engaged or time.time() - self.last_command_received > COMMAND_TIMEOUT:
-                # self._logger.info("Not engaged or time-out, skipping joint command") 
-                return
-            if max(max(self.command), -min(self.command)) > 0:
-                # self._logger.info("EE loop has priority, skipping joint command") 
-                return
-            
-            current_joints = self.bot.arm.get_joint_positions()
-            dq = [
-                self.joint_command[0] - current_joints[0], 
-                self.joint_command[1] - current_joints[1], 
-                self.joint_command[2] - current_joints[2], 
-                self.joint_command[3] - current_joints[3], 
-                self.joint_command[4] - current_joints[4], 
-                self.joint_command[5] - current_joints[5] 
-            ]
-
-            new_joints = [
-                current_joints[0] + min(max(dq[0], 0.02), -0.02),
-                current_joints[1] + min(max(dq[1], 0.02), -0.02),
-                current_joints[2] + min(max(dq[2], 0.02), -0.02),
-                current_joints[3] + min(max(dq[3], 0.02), -0.02),
-                current_joints[4] + min(max(dq[4], 0.02), -0.02),
-                current_joints[5] + min(max(dq[5], 0.02), -0.02)
-            ]
-
-            self._logger.info("Executing joint commands") 
-            succes = self.bot.arm.set_joint_positions(
-                new_joints,
-                moving_time=self.dt*1.1,
-                blocking=False
-            )
-
-            if succes:
-                self.current_pose = self.bot.arm.get_ee_pose()
-                self.cached_joints = self.bot.arm.get_joint_positions()
-        except Exception:
-            self._logger.info(traceback.print_exc())
+    def gripper_command_callback(self, msg: Float32MultiArray):
+        self.gripper_command = msg.data[0]
 
     def control_loop(self):
         try:

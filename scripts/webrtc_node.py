@@ -1,67 +1,33 @@
 #! /usr/bin/env python3
-import asyncio
-import json
-import socket
-import time
-
-import numpy as np
-
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import ReliabilityPolicy, HistoryPolicy, QoSProfile
-from std_msgs.msg import String, Float32MultiArray
-from sensor_msgs.msg import JointState as JointStateROS
+from std_msgs.msg import Float32MultiArray
+from sensor_msgs.msg import JointState
 
-from incar.messages.robot_state_pb2 import *
-from incar.messages.primitives_pb2 import *
-from incar.messages.sensor_data_pb2 import SensorData
-from incar.webrtc.webrtc_connection import WebRTCConnection
-from incar.webrtc.custom_tracks import CV2VideoStreamTrack
+from incar_networking.robot_interface import IncarRobotInterface
 
 
-ROBOT_COMMAND_CHANNEL = "robot_command"
-ROBOT_STATE_CHANNEL = "robot_state"
-CORE_PUBLISHING_DT = 0.01 # TODO: Make configurable
-
-def get_quaternion_from_euler(roll, pitch, yaw):
-    """
-    Convert an Euler angle to a quaternion.
-    
-    Input
-        :param roll: The roll (rotation around x-axis) angle in radians.
-        :param pitch: The pitch (rotation around y-axis) angle in radians.
-        :param yaw: The yaw (rotation around z-axis) angle in radians.
-    
-    Output
-        :return qx, qy, qz, qw: The orientation in quaternion [x,y,z,w] format
-    """
-    qx = np.sin(roll/2) * np.cos(pitch/2) * np.cos(yaw/2) - np.cos(roll/2) * np.sin(pitch/2) * np.sin(yaw/2)
-    qy = np.cos(roll/2) * np.sin(pitch/2) * np.cos(yaw/2) + np.sin(roll/2) * np.cos(pitch/2) * np.sin(yaw/2)
-    qz = np.cos(roll/2) * np.cos(pitch/2) * np.sin(yaw/2) - np.sin(roll/2) * np.sin(pitch/2) * np.cos(yaw/2)
-    qw = np.cos(roll/2) * np.cos(pitch/2) * np.cos(yaw/2) + np.sin(roll/2) * np.sin(pitch/2) * np.sin(yaw/2)
-
-    return [qx, qy, qz, qw]
-
+INCAR_DT = 0.01 # TODO: Make configurable
 
 class WebRTCNode(Node):
     def __init__(self):
         super().__init__('webrtc')
-        self.declare_parameter('port', 9999)
-        self.declare_parameter('local', False)
-        self.declare_parameter('stream_cameras', True)
-        self.declare_parameter('cameras', "{}")
 
         self.left_ee_state = None
         self.right_ee_state = None
-        self.left_joint_states: JointStateROS = None
-        self.right_joint_states: JointStateROS = None
+        self.left_joint_states: JointState = None
+        self.right_joint_states: JointState = None
 
         teleop_qos = QoSProfile(
             reliability = ReliabilityPolicy.BEST_EFFORT,
             history = HistoryPolicy.KEEP_LAST,
             depth = 1
         )
-        self.teleop_pub = self.create_publisher(String, '/robot_commands', qos_profile=teleop_qos)
+        self.left_arm_commands = self.create_publisher(Float32MultiArray, '/left/arm_commands', qos_profile=teleop_qos)
+        self.left_gripper_commands = self.create_publisher(Float32MultiArray, '/left/gripper_commands', qos_profile=teleop_qos)
+        self.right_arm_commands = self.create_publisher(Float32MultiArray, '/right/arm_commands', qos_profile=teleop_qos)
+        self.right_gripper_commands = self.create_publisher(Float32MultiArray, '/right/gripper_commands', qos_profile=teleop_qos)
 
         joint_state_qos = QoSProfile(
             reliability = ReliabilityPolicy.BEST_EFFORT,
@@ -71,173 +37,11 @@ class WebRTCNode(Node):
 
         self.create_subscription(Float32MultiArray, '/left/ee_state', self.log_left_ee, qos_profile=joint_state_qos)
         self.create_subscription(Float32MultiArray, '/right/ee_state', self.log_right_ee, qos_profile=joint_state_qos)
-        self.create_subscription(JointStateROS, '/left/joint_states', self.log_left_joint_states, qos_profile=joint_state_qos)
-        self.create_subscription(JointStateROS, '/right/joint_states', self.log_right_joint_states, qos_profile=joint_state_qos)
+        self.create_subscription(JointState, '/left/joint_states', self.log_left_joint_states, qos_profile=joint_state_qos)
+        self.create_subscription(JointState, '/right/joint_states', self.log_right_joint_states, qos_profile=joint_state_qos)
 
-        self.rtc_initialised = False
-
-    def handle_msg(self, channel, msg: str):
-        if channel == ROBOT_COMMAND_CHANNEL:
-            try:
-                ros_msg = String()
-                ros_msg.data = str(msg)
-                self.teleop_pub.publish(ros_msg)
-            except Exception as e:
-                print(e)
-
-    async def publish_core_data_loop(self):
-        while True:
-            self.rtc_initialised = False
-            while self.rtc.get_peer().connectionState != "connected":
-                await asyncio.sleep(0.2)
-            
-            await asyncio.sleep(1)
-            self.rtc_initialised = True
-
-            while self.rtc.get_peer().connectionState == "connected":
-                start = time.time()
-
-                if self.rtc.data_channels[ROBOT_STATE_CHANNEL].bufferedAmount != 0:
-                    self._logger.info("[WARNING] NOT SENDING ANY DATA TO CORE DUE TO FULL BUFFERS")
-                    await asyncio.sleep(0.02 - (end - start))
-                    continue
-                
-                serialized_msg = self.get_state_message().SerializeToString()
-                self.rtc.send_channel(ROBOT_STATE_CHANNEL, serialized_msg)
-
-                end = time.time()
-                await asyncio.sleep(CORE_PUBLISHING_DT - (end - start))
-
-    def get_state_message(self) -> RobotState:
-        message = RobotState(robotType="dual viper")
-
-        # LEFT
-        left_module = RobotModuleState()
-        left_gripper_module = RobotModuleState()
-
-        if self.left_ee_state is not None:
-            quat = get_quaternion_from_euler(self.left_ee_state[3], self.left_ee_state[4], self.left_ee_state[5])
-            left_ee=CartesianState(
-                pose=Pose(
-                    position=Vector3(
-                        x=self.left_ee_state[0],
-                        y=self.left_ee_state[1],
-                        z=self.left_ee_state[2]
-                    ),
-                    rotation=Quaternion(
-                        x=quat[0],
-                        y=quat[1],
-                        z=quat[2],
-                        w=quat[3],
-                    )
-                )
-            )
-            left_module.ee.CopyFrom(left_ee)
-
-        if self.left_joint_states is not None:
-            left_joint = JointState(
-                positions = list(self.left_joint_states.position)[:6],
-                velocities = list(self.left_joint_states.velocity)[:6],
-                efforts = list(self.left_joint_states.effort)[:6]
-            )
-            left_module.joints.CopyFrom(left_joint)
-
-            left_gripper_joints=JointState(
-                positions = [self.left_joint_states.position[6]],
-                velocities = [self.left_joint_states.velocity[6]],
-                efforts = [self.left_joint_states.effort[6]]
-            )
-            left_gripper_module.joints.CopyFrom(left_gripper_joints)
-
-        message.moduleStates["left.gripper"].CopyFrom(left_gripper_module)
-        message.moduleStates["left.arm"].CopyFrom(left_module)
-
-        # RIGHT
-        right_module = RobotModuleState()
-        right_gripper_module = RobotModuleState()
-
-        if self.right_ee_state is not None:
-            quat = get_quaternion_from_euler(self.right_ee_state[3], self.right_ee_state[4], self.right_ee_state[5])
-            right_ee=CartesianState(
-                pose=Pose(
-                    position=Vector3(
-                        x=self.right_ee_state[0],
-                        y=self.right_ee_state[1],
-                        z=self.right_ee_state[2]
-                    ),
-                    rotation=Quaternion(
-                        x=quat[0],
-                        y=quat[1],
-                        z=quat[2],
-                        w=quat[3],
-                    )
-                )
-            )
-            right_module.ee.CopyFrom(right_ee)
-
-        if self.right_joint_states is not None:
-            right_joint = JointState(
-                positions = list(self.right_joint_states.position)[:6],
-                velocities = list(self.right_joint_states.velocity)[:6],
-                efforts = list(self.right_joint_states.effort)[:6]
-            )
-            right_module.joints.CopyFrom(right_joint)
-
-            right_gripper_joints=JointState(
-                positions = [self.right_joint_states.position[6]],
-                velocities = [self.right_joint_states.velocity[6]],
-                efforts = [self.right_joint_states.effort[6]]
-            )
-            right_gripper_module.joints.CopyFrom(right_gripper_joints)
-
-        message.moduleStates["right.gripper"].CopyFrom(right_gripper_module)
-        message.moduleStates["right.arm"].CopyFrom(right_module)
-
-        return message
-
-    async def spin(self):
-        while rclpy.ok():
-            rclpy.spin_once(self, timeout_sec=0)
-            await asyncio.sleep(1e-4)
-
-    def start(self):
-        if self.get_parameter('local').get_parameter_value().bool_value:
-            ip = "127.0.0.1"
-        else:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            ip = s.getsockname()[0]
-            s.close()
-
-        self.rtc = (WebRTCConnection()
-            .add_channel(ROBOT_COMMAND_CHANNEL, lambda msg: self.handle_msg(ROBOT_COMMAND_CHANNEL, msg))
-            .add_channel(ROBOT_STATE_CHANNEL)
-        )
-
-        tasks = [
-            self.spin(),
-            self.publish_core_data_loop(),
-            self.rtc.start_connection(ip, self.get_parameter('port').value, True),
-        ]
-
-        camera_dict = json.loads(self.get_parameter('cameras').value)
-        if self.get_parameter('stream_cameras').get_parameter_value().bool_value:
-            self._logger.info(f"Opening Cameras: {camera_dict}")
-            for feature_name, camera_id in camera_dict.items():
-                track = CV2VideoStreamTrack(camera_id)
-                self.rtc.add_track(track, feature_name)
-                tasks.append(track.update())
-
-        future = asyncio.wait(
-            tasks,
-            return_when=asyncio.FIRST_EXCEPTION
-        )
-
-        self._logger.info("initialisation done")
-
-        done, _pending = asyncio.get_event_loop().run_until_complete(future)
-        for task in done:
-            task.result()
+    def spin(self, interface: IncarRobotInterface):
+        rclpy.spin_once(self, timeout_sec=0)
 
     def log_left_ee(self, msg):
         self.left_ee_state = msg.data.tolist()[:6]
@@ -245,15 +49,57 @@ class WebRTCNode(Node):
     def log_right_ee(self, msg):
         self.right_ee_state = msg.data.tolist()[:6]
 
-    def log_left_joint_states(self, joint_state_msg: JointStateROS):
+    def log_left_joint_states(self, joint_state_msg: JointState):
         self.left_joint_states = joint_state_msg
 
-    def log_right_joint_states(self, joint_state_msg: JointStateROS):
+    def log_right_joint_states(self, joint_state_msg: JointState):
         self.right_joint_states = joint_state_msg
     
-
+    def publish_state(self, interface: IncarRobotInterface):
+        if self.left_ee_state is not None and self.left_joint_states is not None:
+            interface.set_robot_state(
+                "left.arm", 
+                ee_pose=self.left_ee_state, 
+                joint_pos=self.left_joint_states.position[:6],
+                joint_vel=self.left_joint_states.velocity[:6],
+                joint_effort=self.left_joint_states.effort[:6]
+            )
+            interface.set_robot_state(
+                "left.gripper", 
+                joint_pos=[self.left_joint_states.position[6]],
+                joint_vel=[self.left_joint_states.velocity[6]],
+                joint_effort=[self.left_joint_states.effort[6]]
+            )
+        if self.right_ee_state is not None and self.right_joint_states is not None:
+            interface.set_robot_state(
+                "right.arm", 
+                ee_pose=self.right_ee_state, 
+                joint_pos=self.right_joint_states.position[:6],
+                joint_vel=self.right_joint_states.velocity[:6],
+                joint_effort=self.right_joint_states.effort[:6]
+            )
+            interface.set_robot_state(
+                "right.gripper", 
+                joint_pos=[self.right_joint_states.position[6]],
+                joint_vel=[self.right_joint_states.velocity[6]],
+                joint_effort=[self.right_joint_states.effort[6]]
+            )
+        interface.publish_state()
 
 if __name__ == "__main__":
     rclpy.init()
     webrtc_node = WebRTCNode()
-    webrtc_node.start()
+    interface = IncarRobotInterface(
+        INCAR_DT,
+        command_hooks = {
+            "right.commands.arm.ee.velocity": lambda x: webrtc_node.right_arm_commands.publish(Float32MultiArray(data=x)),
+            "left.commands.arm.ee.velocity": lambda x: webrtc_node.left_arm_commands.publish(Float32MultiArray(data=x)),
+            "right.commands.gripper.openclose": lambda x: webrtc_node.right_gripper_commands.publish(Float32MultiArray(data=x)),
+            "left.commands.gripper.openclose": lambda x: webrtc_node.left_gripper_commands.publish(Float32MultiArray(data=x))
+        },
+        loop_callbacks = [
+            webrtc_node.spin,
+            webrtc_node.publish_state
+        ]
+    )
+    interface.start()
