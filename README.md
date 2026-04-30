@@ -43,9 +43,3 @@ ros2 launch viper_teleop dual_arm.launch.py
 ```bash
 ros2 launch viper_teleop teleop.launch.py
 ```
-
-# TODO's
-- First off make the ee controller have proper rotations
-- Make IP and port launch arguments
-- Make single arm versions
-- Make `go_to_sleep_slowly.py` accessible with `ros2 run`
