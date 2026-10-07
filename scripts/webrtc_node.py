@@ -1,4 +1,5 @@
 #! /usr/bin/env python3
+import json
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import ReliabilityPolicy, HistoryPolicy, QoSProfile
@@ -6,6 +7,7 @@ from std_msgs.msg import Float32MultiArray
 from sensor_msgs.msg import JointState
 
 from incar_networking.robot_interface import IncarRobotInterface
+from camera_config import OpenCVConfig
 
 
 INCAR_DT = 0.01 # TODO: Make configurable
@@ -13,6 +15,9 @@ INCAR_DT = 0.01 # TODO: Make configurable
 class WebRTCNode(Node):
     def __init__(self):
         super().__init__('webrtc')
+
+        self.declare_parameter('stream_cameras', True)
+        self.declare_parameter('cameras', '{}')
 
         self.left_ee_state = None
         self.right_ee_state = None
@@ -41,6 +46,16 @@ class WebRTCNode(Node):
         self.create_subscription(Float32MultiArray, '/right/ee_state', self.log_right_ee, qos_profile=joint_state_qos)
         self.create_subscription(JointState, '/left/joint_states', self.log_left_joint_states, qos_profile=joint_state_qos)
         self.create_subscription(JointState, '/right/joint_states', self.log_right_joint_states, qos_profile=joint_state_qos)
+
+    def build_camera_configs(self):
+        """OpenCV camera configs from the task config's `cameras` parameter ({stream name: port})."""
+        stream_cameras = self.get_parameter('stream_cameras').value
+        if isinstance(stream_cameras, str):
+            stream_cameras = stream_cameras.lower() == 'true'
+        if not stream_cameras:
+            return {}
+        cameras = json.loads(self.get_parameter('cameras').value)
+        return {name: OpenCVConfig(port=port) for name, port in cameras.items()}
 
     def spin(self, interface: IncarRobotInterface):
         rclpy.spin_once(self, timeout_sec=0)
@@ -104,6 +119,7 @@ if __name__ == "__main__":
         loop_callbacks = [
             webrtc_node.spin,
             webrtc_node.publish_state
-        ]
+        ],
+        cameras = webrtc_node.build_camera_configs()
     )
     interface.start()
