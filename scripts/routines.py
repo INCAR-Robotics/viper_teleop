@@ -37,6 +37,17 @@ class Routine(ABC):
     def execute(self, bot: InterbotixManipulatorXS, logger, current_ee_pose_matrix):
         raise NotImplementedError()
 
+class CloseAndOpenGripperRoutine(Routine):
+    closed_position: float = 0.8
+
+    def __init__(self, closed_position: float):
+        self.closed_position = closed_position
+
+    def execute(self, bot, logger, current_ee_pose_matrix):
+        bot.gripper.core.robot_write_joint_command('gripper', self.closed_position)
+        time.sleep(0.5)
+        bot.gripper.core.robot_write_joint_command('gripper', bot.gripper.open_position)
+        time.sleep(0.5)
 
 class SetpointRoutine(Routine):
     joint_positions: list[float] = []
@@ -168,12 +179,14 @@ class RemoveCapRoutine(Routine):
         bot.arm.set_single_joint_position("wrist_rotate", target_joint_position, moving_time=1, blocking=True)
 
         for i in range(self.n_rotations):
-            bot.gripper.grasp(0.2)
+            bot.gripper.core.robot_write_joint_command('gripper', bot.gripper.closed_position)
+            time.sleep(0.2)
 
             target_joint_position = initial_joint_position - math.pi/4
             bot.arm.set_single_joint_position("wrist_rotate", target_joint_position, moving_time=1, blocking=True)
 
-            bot.gripper.release(0.2)
+            bot.gripper.core.robot_write_joint_command('gripper', bot.gripper.open_position)
+            time.sleep(0.2)
             if i == self.n_rotations - 1: continue
 
             target_joint_position = initial_joint_position + math.pi/4
@@ -181,7 +194,8 @@ class RemoveCapRoutine(Routine):
 
 
         bot.arm.set_single_joint_position("wrist_rotate", initial_joint_position, moving_time=1, blocking=True)
-        bot.gripper.grasp(0.2)
+        bot.gripper.core.robot_write_joint_command('gripper', bot.gripper.closed_position)
+        time.sleep(0.2)
 
         target_ee_pose = copy.copy(current_ee_pose_matrix)
         target_ee_pose[2, 3] = current_ee_pose_matrix[2,3] + 0.15
@@ -193,3 +207,72 @@ class RemoveCapRoutine(Routine):
             moving_time=1,
             blocking=True
         )
+
+class ShakeZRoutine(Routine):
+    n_shakes = 3
+    shake_amplitude = 0.015
+    home_position = [0.8728, -0.4847, 0.3267, -0.8943, 1.8622, 1.5309]
+
+    def execute(self, bot, logger, current_ee_pose_matrix):
+        target_pose_low = copy.copy(current_ee_pose_matrix)
+        target_pose_low[2, 3] = target_pose_low[2, 3] - self.shake_amplitude/2
+        target_pose_high = copy.copy(current_ee_pose_matrix)
+        target_pose_high[2, 3] = target_pose_high[2, 3] + self.shake_amplitude/2
+
+        bot.arm.set_trajectory_time(0.02)
+        current_joint_positions = bot.arm.get_joint_positions()
+
+        for i in range(self.n_shakes):
+            bot.arm.set_ee_pose_matrix(
+                target_pose_high,
+                custom_guess=current_joint_positions,
+                moving_time=0.02,
+                blocking=True
+            )
+
+            bot.arm.set_ee_pose_matrix(
+                target_pose_low,
+                custom_guess=current_joint_positions,
+                moving_time=0.02,
+                blocking=True
+            )
+
+        bot.arm.set_ee_pose_matrix(
+            current_ee_pose_matrix,
+            custom_guess=current_joint_positions,
+            moving_time=0.02,
+            blocking=True
+        )
+
+        bot.arm.set_trajectory_time(3)
+        bot.arm.set_joint_positions(self.home_position, moving_time=3, blocking=True)
+        
+class FillContainerRoutine(Routine):
+    # Each arm runs its own instance (configured per arm): pose_1 -> pose_2 -> optional
+    # gripper close -> pose_1. Both arms use identical timings so that, when triggered
+    # together, they stay in lockstep without any explicit cross-arm synchronisation.
+    pose_1: list[float] = []
+    pose_2: list[float] = []
+    close_gripper: bool = False
+    moving_time: float = 3.0
+    gripper_time: float = 0.5
+
+    def __init__(self, pose_1: list[float], pose_2: list[float], close_gripper: bool = False,
+                 moving_time: float = 3.0, gripper_time: float = 0.5):
+        self.pose_1 = pose_1
+        self.pose_2 = pose_2
+        self.close_gripper = close_gripper
+        self.moving_time = moving_time
+        self.gripper_time = gripper_time
+
+    def execute(self, bot, logger, current_ee_pose_matrix):
+        bot.arm.set_trajectory_time(self.moving_time)
+        bot.arm.set_joint_positions(self.pose_1, moving_time=self.moving_time, blocking=True)
+        bot.arm.set_joint_positions(self.pose_2, moving_time=self.moving_time, blocking=True)
+
+        if self.close_gripper:
+            bot.gripper.core.robot_write_joint_command('gripper', bot.gripper.closed_position)
+        # The arm that doesn't close its gripper waits too, to stay in step with the other one
+        time.sleep(self.gripper_time)
+
+        bot.arm.set_joint_positions(self.pose_1, moving_time=self.moving_time, blocking=True)

@@ -35,6 +35,8 @@ class TeleopNode(Node):
         self.declare_parameter('home_position', [0.0107, 0.0169, 0.0276, -0.0077, 1.5693, 0.0123])
         self.declare_parameter('start_with_gripper_open', True)
         self.declare_parameter('gripper_enabled', True)
+        self.declare_parameter('gripper_open_position', -1.0)
+        self.declare_parameter('gripper_closed_position', -1.0)
         self.declare_parameter('routines', "[]")
         self.dt = self.get_parameter('dt').value
         self.gripper_enabled = self.get_parameter('gripper_enabled').get_parameter_value().bool_value
@@ -71,14 +73,47 @@ class TeleopNode(Node):
         self.bot.arm.set_joint_positions(self.get_parameter('home_position').value, moving_time=5, blocking=True)
         self.current_pose = self.bot.arm.get_ee_pose()
         self.cached_joints = self.bot.arm.get_joint_positions()
+
+        # Calibrate the gripper's physical open/closed extremes (in raw motor radians, the
+        # same units as get_gripper_position()) while in the default 'pwm' operating
+        # mode, then switch to 'current_based_position' so gripper_command can drive it
+        # continuously to any aperture in between, with torque still capped by gripper_pressure
+        # instead of ramming a possibly-blocked target at full force like plain 'position' mode.
+        self.gripper_open_position = self.get_parameter('gripper_open_position').value
+        self.gripper_closed_position = self.get_parameter('gripper_closed_position').value
+
+        if self.gripper_open_position < 0 or self.gripper_closed_position < 0:
+            self.bot.gripper.core.robot_set_operating_modes('single', 'gripper', 'pwm')
+            self.bot.gripper.release(1.0)
+            self.gripper_open_position = self.bot.gripper.get_gripper_position()
+            self._logger.info(f"Calibrated open position: {self.gripper_open_position}")
+            self.bot.gripper.grasp(1.0)
+            self.gripper_closed_position = self.bot.gripper.get_gripper_position()
+            self._logger.info(f"Calibrated closed position: {self.gripper_closed_position}")
+
+        self.bot.gripper.core.robot_set_operating_modes('single', 'gripper', 'current_based_position')
+        # Current_Limit is an EEPROM register; torque must be off to write it.
+        self.bot.gripper.core.robot_torque_enable('single', 'gripper', False)
+        self.bot.gripper.core.robot_set_motor_registers(
+            'single', 'gripper', 'Current_Limit', int(self.bot.gripper.gripper_value)
+        )
+        self.bot.gripper.core.robot_torque_enable('single', 'gripper', True)
+
+        # Exposed on bot.gripper so routines.py can command full open/close via
+        # robot_write_joint_command instead of grasp()/release(), which assumed pwm-mode
+        # effort semantics and would be misread as huge position targets now.
+        self.bot.gripper.open_position = self.gripper_open_position
+        self.bot.gripper.closed_position = self.gripper_closed_position
+
         if self.get_parameter('start_with_gripper_open').value:
-            self.bot.gripper.release()
             self.gripper_is_open = True
             self.gripper_command = 0.0
+            self.bot.gripper.core.robot_write_joint_command('gripper', self.gripper_open_position)
         else:
-            self.bot.gripper.grasp()
             self.gripper_is_open = False
             self.gripper_command = 1.0
+            self.bot.gripper.core.robot_write_joint_command('gripper', self.gripper_closed_position)
+        time.sleep(1.0)
 
         # Subscribe to teleop_commands
         self._logger.info("Initialised robot, waiting for first command...")
@@ -147,7 +182,8 @@ class TeleopNode(Node):
                 time.sleep(0.1)
                 self.buffered_routine.execute(self.bot, self._logger, self.current_pose)
                 self.current_pose = self.bot.arm.get_ee_pose()
-                if self.bot.gripper.get_gripper_position() > 1.35:
+                gripper_position = self.bot.gripper.get_gripper_position()
+                if abs(gripper_position - self.gripper_open_position) < abs(gripper_position - self.gripper_closed_position):
                     self._logger.info("Gripper is open at the end of routine")
                     self.gripper_is_open = True
                 else:
@@ -160,14 +196,13 @@ class TeleopNode(Node):
                 self.is_running_routine = False
                 return
         
-            if self.gripper_enabled and self.gripper_command > 0.75 and self.gripper_is_open:
-                self._logger.info("GRASPING")
-                self.bot.gripper.grasp(0)
-                self.gripper_is_open = False
-            elif self.gripper_enabled and self.gripper_command < 0.25 and not self.gripper_is_open:
-                self._logger.info("RELEASING")
-                self.bot.gripper.release(0)
-                self.gripper_is_open = True
+            if self.gripper_enabled:
+                gripper_fraction = min(max(self.gripper_command, 0.0), 1.0)
+                gripper_target = self.gripper_open_position + gripper_fraction * (
+                    self.gripper_closed_position - self.gripper_open_position
+                )
+                self.bot.gripper.core.robot_write_joint_command('gripper', gripper_target)
+                self.gripper_is_open = gripper_fraction < 0.5
             
             if max(max(self.command), -min(self.command)) == 0: return # Let joint_control_loop take over
             

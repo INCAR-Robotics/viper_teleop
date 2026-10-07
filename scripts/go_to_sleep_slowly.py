@@ -29,6 +29,11 @@ def main():
     left_bot.arm.go_to_sleep_pose(moving_time=5, blocking=False)    
     right_bot.arm.go_to_sleep_pose(moving_time=5, blocking=True)
 
+    # teleop_node.py leaves the gripper motor in 'current_based_position' mode, which persists
+    # on the xs_sdk driver across process restarts; restore 'pwm' mode so release()'s effort
+    # value isn't misread as a raw position target.
+    left_bot.gripper.core.robot_set_operating_modes('single', 'gripper', 'pwm')
+    right_bot.gripper.core.robot_set_operating_modes('single', 'gripper', 'pwm')
     left_bot.gripper.release()
     right_bot.gripper.release()
 
